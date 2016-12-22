@@ -1,0 +1,44 @@
+
+//
+// simplest blink
+//
+// runs a loop in low memory for a while (about 0.6s at 1MHz) and then
+// the same loop in high memory for a while, repeating infinitely.
+// the point being that by monitoring the higher lines of the address
+// bus, i might be able to confirm that the processor is actually running.
+//
+// intended to be burned into an eeprom while there's no RAM installed
+// as my first test code
+//
+// this is also the first 6502 assembly code i've written in 31 years!
+//
+// paul dourish, november 2016
+//
+
+
+  *= $8000
+
+low
+  LDX #255
+lloop1
+  LDY #255
+lloop2
+  DEY
+  BNE lloop2
+  DEX
+  BNE lloop1
+  JMP high
+
+
+  *= $F000
+
+high
+  LDX #255
+hloop1
+  LDY #255
+hloop2
+  DEY
+  BNE hloop2
+  DEX
+  BNE hloop1
+  JMP low

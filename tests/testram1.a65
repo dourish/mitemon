@@ -1,0 +1,58 @@
+
+//
+// the ram test involves a loop that gets placed at four different
+// spots in memory, each of which will cause a different set of
+// address lines to latch. the code for the rom starts off by
+// copying the loop code to three other points and then jumps
+// in. This code goes at $8800; the base loop code goes at $8000
+//
+// paul dourish, december 2016
+//
+
+
+  *= $8800
+
+setup
+  LDX #11        // BUG: is that the right number?
+copy1
+  LDA $8000,X
+  STA $1000,X
+  DEX
+  BNE copy1
+  LDA $8000      // copy the zeroth byte by hand
+  STA $1000
+  LDA #0         // add JMP $2000 at the end
+  STA $100B
+  LDA #$20
+  STA $100C
+
+
+  LDX #11
+copy2
+  LDA $8000,X
+  STA $2000,X
+  DEX
+  BNE copy2
+  LDA $8000
+  STA $2000
+  LDA #0         // add JMP $4000 at the end
+  STA $200B
+  LDA #$40
+  STA $200C
+
+  LDX #11
+copy3
+  LDA $8000,X
+  STA $4000,X
+  DEX
+  BNE copy3
+  LDA $8000
+  STA $4000
+  LDA #0         // add JMP $8000 at the end
+  STA $400B
+  LDA #$80
+  STA $400C
+
+  // and now start the loops
+  //
+  JMP $8000

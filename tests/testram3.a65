@@ -1,0 +1,61 @@
+//
+// ROM code for basic RAM test
+//
+// takes a single block of code, which implement a busy-wait, and copies
+// it from ROM into three different locations in RAM. then ties them
+// together with JMPs, in sequence. the result should be that the upper
+// address lines cycle slowly through 0001, 0010, 0100, and 1000, which
+// i should be able to monitor with LEDs and will indicate that reading
+// and writing to RAM are both working.
+//
+// paul dourish, december 2016
+
+
+  * = $8000
+
+start
+  JMP copycode
+
+// delay by counting down X and Y 256^2 times
+//
+delaycode
+  LDX #255
+outer
+  LDY #255
+inner
+  DEY
+  BNE inner
+  DEX
+  BNE outer
+  JMP $1000
+
+copycode        // copy "delaycode" code block from ROM into RAM
+  LDX #11
+copyloop:
+  LDA delaycode,X
+  STA $1000,X
+  STA $2000,X
+  STA $4000,X
+  DEX
+  BNE copyloop
+
+  LDA delaycode // zeroth instruction
+  STA $1000
+  STA $2000
+  STA $4000
+
+  LDA #$00      // store jump instructions addresses. low byte first...
+  STA $100B
+  STA $200B
+  LDA #$03      // the last targets delaycode:, not start:
+  STA $400B
+
+  LDA #$20      // ... then high bytes
+  STA $100C
+  LDA #$40
+  STA $200C
+  LDA #$80
+  STA $400C
+
+  JMP delaycode // starts the whole thing going
+

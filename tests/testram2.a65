@@ -1,0 +1,22 @@
+
+//
+// runs a simple loop just to hold most of the address lines pretty
+// stable since it doesn't move around very much.
+//
+// paul dourish, december 2016
+//
+
+
+  *= $8000
+
+low
+  LDX #255
+lloop1
+  LDY #255
+lloop2
+  DEY
+  BNE lloop2
+  DEX
+  BNE lloop1
+  JMP $1000
+
