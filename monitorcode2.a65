@@ -1,0 +1,206 @@
+// Very simple monitor program for 6502. Just enough to get things going.
+// This will expand until it's able to handle uploads... and at that point, I
+// don't think I'll need it any more.
+//
+// Paul Dourish, December 2016.
+//
+
+// Memory map is:
+//
+
+// Conventions in this code (memory usage etc):
+//
+
+// Major entry points:
+//
+
+
+// initialize the processor. set up the stack. initialize ACIA.
+//
+  ldx #$ff
+  txs
+
+// print welcome message
+//
+
+// prompt and command loop
+//
+
+
+
+// what's the format of the dispatch table?
+// each entry contains:
+// * a 16-bit pointer to the next entry, or $0000 to mark the last
+// * a null-terminated string
+// * a 16-bit address for the handling routine
+//
+// how can i specify that to the assembler?
+
+table
+  .word table1
+  "dump"
+  .byte 0
+  .word dumpcode
+table1
+  .word $0000
+  "echo"
+  .byte 0
+  .word echocode
+
+// commands anticipated:
+// dump
+// echo
+// run
+// upload
+// poke
+
+
+// set the "entry" pointer to the start of the dispatch table
+// for each entry in the table:
+//   make a note of the location of the next entry
+//   compare the buffer to the entry label
+//   if no match, issue an error
+//   if there's a match, jump to the relevant routine
+
+matchcommand:
+  lda #00        // low byte of table address
+  sta entry
+  lda #c0        // high byte of table address
+  sta entry+1
+
+testentry:
+  lda entry      // copy the pointer to next entry
+  sta $AA        // store in scratchpad
+  lda entry+1
+  STA $AB
+  ldx #0         // will use X and Yas index for string
+  ldy #2
+nextchar:
+  LDA buffer,x
+  BEQ endofword
+  CMP entry,y
+  BNE nextentry
+  INX
+  INY
+  JMP nextchar
+
+endofword:
+  // we got here because we hit the end of the word in the buffer
+  // if it's also the end of the entry label, then we've found the right place
+  LDA entry,y
+  BEQ successful
+  // but if it's not, then we haven't.
+  // continue to the next entry
+  JMP nextentry
+successful:
+  // we got a match! copy out the destination address, jump to it
+  INY
+  LDA entry,Y
+  STA $AC
+  INY
+  LDA entry,Y
+  STA $AD
+  // FIX: how do we handle parameters?
+  JSR ($AC)   // DAMN THIS DOESN'T WORK -- JSR ONLY ALLOWS ABSOLUTE ADDRESSING!!!
+              // SO PERHAPS JMP INSTEAD? AND JUMP BACK IN FROM THE END? OR RTS?
+              // OR JUST WRITE A JSR INSTRUCTION IN AHEAD OF THE ADDRESS?
+  // after the operation, return from matchcommand
+  RTS  // IS THIS REALLY A SUBROUTINE?
+    
+nextentry:
+  lda $AA           // copy the address of next entry from scratchpad
+  sta entr
+  lda $AB
+  sta entry+1
+  // test for null here
+  ora $AA           // check if the entry was $0000
+  beq endoftable    // if so, we're at the end of table
+  jmp testentry
+
+endoftable:
+  // got to the end of the table with no match
+  // print an error message, and return to line input
+  // ...
+
+
+// read a four-character string from buffer and interpret it as a 16-bit
+// hex number, leaving the result in $A2 and $A3 (in low-endian format)
+// e.g. for a JSR instruction in the monitor.
+//
+// input: $A0-$A1, address of string
+// output: $A2-$A2, parsed result
+// should this really hold X on the stack in the meantime?
+//
+parseaddress:
+  LDX #0
+  LDA $A0,X // first nybble
+  SBC #64
+  ASL A
+  ASL A
+  ASL A
+  ASL A
+  STA $A3
+  INX
+  LDA $A0,X // second nybble
+  SBC #64
+  ADC $A3
+  STA $A3
+
+  // second (low-order) byte
+  INX
+  LDA $A0,X // first (ie third) nybble
+  SBC $64
+  ASL A
+  ASL A
+  ASL A
+  ASL A
+  STA $A2
+  INX
+  LDA buffer,X // second (ie fourth) nybble
+  SBC #64
+  ADC $A2
+  STA $A2
+  RTS
+
+
+// This is the stuff downloaded from
+// http://www.grappendorf.net/projects/6502-home-computer/acia-serial-interface-hello-world.html
+// Right now, it isn't even in the right format...
+//
+//
+
+main
+init_acia
+
+  lda #%00001011				;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111				;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+write
+  ldx #0
+
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda text,x
+  beq read
+  sta ACIA_DATA
+  inx
+  jmp next_char
+
+read
+wait_rxd_full	 
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+  lda ACIA_DATA
+  jmp write
+
+text:            .byte "Hello World!", $0d, $0a, $00
+
+
+
+
