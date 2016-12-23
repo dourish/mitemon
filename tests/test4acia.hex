@@ -1,0 +1,10 @@
+
+$A4000, 
+a9 0b 8d 03 80 a9 1f 8d 02 80 a2 00 ad 01 80 29 
+10 f0 f9 bd 36 c0 f0 07 8d 00 80 e8 4c 0c c0 a2 
+ff a0 ff 88 d0 fd ca d0 f8 a2 ff a0 ff 88 d0 fd 
+ca d0 f8 4c 00 c0 48 65 6c 6c 6f 20 57 6f 72 6c 
+64 21 0d 0a 00 
+$A7FFA,
+00 C0 00 C0 00 C0 
+

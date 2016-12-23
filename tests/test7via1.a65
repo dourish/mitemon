@@ -1,0 +1,76 @@
+// Basic test for 6522 VIA.
+//
+// Wow, subroutines. That means I'm going to need to initialize
+// the stack.
+//
+
+
+* = $C000
+
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_CONTROL = $8802
+ACIA_COMMAND = $8803
+
+; 6522 Chip registers
+VIA_PORTB = $8000
+VIA_PORTA = $8001
+VIA_DDRB  = $8002
+VIA_DDRA  = $8003
+VIA_T1CL  = $8004
+VIA_T1CH  = $8005
+VIA_T1LL  = $8006
+VIA_T1LH  = $8007
+VIA_T2LL  = $8008
+VIA_T2CL  = $8008
+VIA_T2CH  = $8009 
+VIA_SR    = $800A
+VIA_ACR   = $800B
+VIA_PCR   = $800C
+VIA_IFR   = $800D
+VIA_IER   = $800E
+VIA_ORAX  = $C20F
+
+init
+  LDX #255         // initialize the stack
+  TXS
+  CLD              // clear decimal mode
+  SEI              // disable interrupts
+
+setupvia
+  LDA #%11111111   // Set port A to all outputs
+  STA VIA_DDRA
+
+  LDA #%10001000   // load a bit pattern
+
+output
+  STA VIA_PORTA    // write it to port A
+  JSR longpause    // pause. resets the accumulator?
+  ROR              // shift the pattern
+  JMP output       // repeat
+  
+
+// a "longpause" is about half a second at 500 kHz.
+longpause
+  LDX #255
+longouter
+  LDY #255
+longinner
+  DEY
+  BNE longinner
+  DEX
+  BNE longouter
+  RTS
+
+// a "shorpause" is about a third of a long pause.
+shortpause
+  LDX #85
+shortouter
+  LDY #255
+shortinner
+  DEY
+  BNE shortinner
+  DEX
+  BNE shortouter
+  RTS
+

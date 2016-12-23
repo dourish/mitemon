@@ -1,0 +1,10 @@
+
+$A0000, 
+4c 10 c0 a2 ff a0 ff 88 d0 fd ca d0 f8 4c 00 10 
+a2 0b bd 03 c0 9d 00 10 9d 00 20 9d 00 40 ca d0 
+f1 ad 03 c0 8d 00 10 8d 00 20 8d 00 40 a9 00 8d 
+0b 10 8d 0b 20 a9 03 8d 0b 40 a9 20 8d 0c 10 a9 
+40 8d 0c 20 a9 c0 8d 0c 40 4c 03 c0 
+$A3FFA,
+00 C0 00 C0 00 C0 
+
