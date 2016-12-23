@@ -27,6 +27,8 @@ VIA_ORAX  = $C20F
 datapage = $0400
 value = $00f0
 
+* = $C000
+
 init
   LDX #255         // initialize the stack
   TXS
@@ -41,8 +43,9 @@ setupvia
 ;; zero out a page of data. we use this to keep track of values
 ;; that have been eliminated.
   ldx #255
+  lda #0
 zeroloop
-  stz datapage,x
+  sta datapage,x
   dex
   bne zeroloop
 
@@ -81,18 +84,20 @@ done
 
 ;; once we've identified the primes, start to display them. ends in infinite loop.
 ;;
-finished
-  clc
+finish
   ldx #0
-  ;; set up ACIA here
+  ;; set up VIA here
 displayloop
   lda datapage,x
   bne next
-  sta ACIA_PORTA
+  sta VIA_PORTA
+  txa
+  pha
   jsr longpause
+  pla
+  tax
 next
   inx
-  bcs finished
   jmp displayloop
       
 
