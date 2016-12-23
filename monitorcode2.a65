@@ -9,10 +9,14 @@
 // 0000 - 7FFF   RAM
 // 8000 - BFFF   ACIA, mirrored many times
 // C000 - FFFF   ROM
+//
+// (for simulator, ACIA at 8800)
+//
 
 // Conventions in this code (memory usage etc):
 // Scratchpad at $00A0 - $00AF
 // JSR "trampoline" at ??
+// input line buffer at $0200-$0300
 //
 
 // Major entry points:
