@@ -6,9 +6,13 @@
 //
 
 // Memory map is:
-//
+// 0000 - 7FFF   RAM
+// 8000 - BFFF   ACIA, mirrored many times
+// C000 - FFFF   ROM
 
 // Conventions in this code (memory usage etc):
+// Scratchpad at $00A0 - $00AF
+// JSR "trampoline" at ??
 //
 
 // Major entry points:
@@ -23,8 +27,12 @@
 // print welcome message
 //
 
+welcome
+  .byte "6502 Mite simple monitor\n", $00
+
 // prompt and command loop
 //
+  LDA #xx     // ascii value of "*"
 
 
 
@@ -51,9 +59,10 @@ table1
 // dump
 // echo
 // run
-// upload
+// load
 // poke
-
+// help
+//
 
 // set the "entry" pointer to the start of the dispatch table
 // for each entry in the table:
@@ -122,6 +131,15 @@ endoftable:
   // print an error message, and return to line input
   // ...
 
+
+// basic loop:
+// reset the input buffer
+// output the prompt
+// collect a line of characters until we see a carriage return, storing them in a buffer
+// go through the buffer, creating a vector of addresses for white-space separated words
+// add null terminators to each word
+// use dispatch table to find code ro handle each instruction
+// how to handle parameters? have the vector in a known location?
 
 // read a four-character string from buffer and interpret it as a 16-bit
 // hex number, leaving the result in $A2 and $A3 (in low-endian format)
