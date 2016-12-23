@@ -1,0 +1,12 @@
+if [ $# -lt 1 ]; then
+  >&2 echo "Usage: $0 file.o65"
+  exit 1
+fi
+echo \
+#echo '$A'"$2, "
+echo '$A4000, "
+od -v -t x1 $1 | head -n -1 | sed 's/^[0-9]* //' | sed 's/$/ /'
+echo "$A7FFA, "
+echo "00 C0 00 C0 00 C0 "
+echo \
+
