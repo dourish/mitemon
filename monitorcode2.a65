@@ -20,24 +20,36 @@
 //
 
 // Major entry points:
+// (what do i need? init? process a command? wait for a command?
 //
 
 
 // initialize the processor. set up the stack. initialize ACIA.
 //
+init
   ldx #$ff
   txs
+  lda #%00001011				// No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111				// 1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
 
 // print welcome message
 //
+  LDA #<welcome
+  STA $C0
+  LDA #<welcome
+  STA $C1
+  JSR printstring
 
-welcome
-  .byte "6502 Mite simple monitor\n", $00
 
 // prompt and command loop
 //
+prompt
   LDA #xx     // ascii value of "*"
-
+  STA $B0
+  JSR outchar
+  JSR readline
 
 
 // what's the format of the dispatch table?
@@ -76,9 +88,9 @@ table1
 //   if there's a match, jump to the relevant routine
 
 matchcommand:
-  lda #00        // low byte of table address
+  lda #<table    // low byte of table address
   sta entry
-  lda #c0        // high byte of table address
+  lda #>table    // high byte of table address
   sta entry+1
 
 testentry:
@@ -220,9 +232,32 @@ wait_rxd_full
   beq wait_rxd_full
   lda ACIA_DATA
   jmp write
+  
 
-text:            .byte "Hello World!", $0d, $0a, $00
+
+outchar                       // write out character stored at $00B0
+  lda ACIA_STATUS
+  and #$10
+  beq outchar
+  lda $B0
+  sta ACIA_DATA
+  rts
+  
+printstring
+  LDX #0
+printnext
+  LDA ($C0),X
+  BEQ printdone
+  STA $B0
+  JSR outchar
+printdone
+  RTS
 
 
+helloworld
+            .byte "Hello World!", $0d, $0a, $00
+
+welcome
+  .byte "6502 Mite simple monitor", $0d, $0a, $00
 
 
