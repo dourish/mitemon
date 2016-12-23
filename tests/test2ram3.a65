@@ -9,9 +9,11 @@
 // and writing to RAM are both working.
 //
 // paul dourish, december 2016
+//
+// revised for new memory map
 
 
-  * = $8000
+  * = $C000
 
 start
   JMP copycode
@@ -54,7 +56,7 @@ copyloop:
   STA $100C
   LDA #$40
   STA $200C
-  LDA #$80
+  LDA #$C0
   STA $400C
 
   JMP delaycode // starts the whole thing going
