@@ -1,0 +1,69 @@
+// Basic input test for 6551 ACIA.
+//
+// Partly adapted from code at:
+// http://www.grappendorf.net/projects/6502-home-computer/acia-serial-interface-hello-world.html
+//
+// since i'm having trouble debugging the ACIA, this is simpler --
+// output a test string repeatedly, pausing between versions
+// i should at least be able to see the transmit line blinking on and off
+// if it's working.
+//
+// this version is for testing in SYMON. the difference between SYMON
+// and the mite is the location of the ACIA in the memory map.
+//
+
+* = $C000
+
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_CONTROL = $8802
+ACIA_COMMAND = $8803
+
+main
+init_acia
+
+  lda #%00001011		;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+write
+  ldx #0
+
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda text,x
+  beq pause
+  sta ACIA_DATA
+  inx
+  jmp next_char
+
+pause
+  //pause once
+  LDX #255
+outer
+  LDY #255
+inner
+  DEY
+  BNE inner
+  DEX
+  BNE outer
+
+  // do it again
+  LDX #255
+outer2
+  LDY #255
+inner2
+  DEY
+  BNE inner2
+  DEX
+  BNE outer2
+
+  // go back to the output routine
+  JMP $C000
+	      
+
+text:            .byte "Hello World!", $0d, $0a, $00
