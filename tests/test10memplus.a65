@@ -18,6 +18,7 @@
 #include "../init.a65"
 
 pagebase = $00a0
+status   = $00a2
 
 ;; testing a page of memory successfully takes ~1/100th of a second
 ;; at 0.5MHz. There's 128 pages of RAM, so around 1.5s total. in other
@@ -33,7 +34,7 @@ memtest
 
 pageloop
   lda pagebase+1           ; 4 cycles 
-  cmp #C0                  ; 2 cycles
+  cmp #$C0                 ; 2 cycles
   beq endmemtest           ; 2 cycles (not talken)
 
 pagetest                   ; loop is 11 cycles, * 255, 2805 total
@@ -221,6 +222,12 @@ wait_txd_empty2
   inx
   jmp next_char2
 
+good4
+  LDA status
+  ORA #64
+  STA status
+  STA VIA_PORTA
+
 read2
 wait_rxd_full2
   lda ACIA_STATUS
@@ -259,3 +266,4 @@ shortinner
   RTS
 
 
+text .byte "Hello World!", $0d, $0a, $00
