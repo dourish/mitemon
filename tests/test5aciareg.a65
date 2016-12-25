@@ -1,0 +1,60 @@
+// Basic test for 6551 ACIA.
+//
+// still debugging ACIA. All this does it to write to the control
+// register and then read the result back. it does that with two
+// different values, with a pause in between.
+//
+// hmm.. the point was that the data lines would be reasonably stable
+// on those two values, but they won't be, will they? they need to load
+// instructions, etc. perhaps i need to write, read, test, and then loop
+// in different places depending on whether that worked or not, so that
+// i can read results off the address lines?
+//
+// this is where it would be nice to have a 6522 and be able to do some
+// other output!
+//
+// okay, here's the solution
+// copy a loop into low memory
+// test the ACIA control register
+// read the ACIA control register
+// if the result is correct, loop in high memory (~$F000)
+// (four most significant bits of address will be on)
+// if the result is wrong, loop in low memory (~$5000)
+// (four most significant bits of address will alternate 0 and 1)
+//
+
+
+* = $F000
+
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_CONTROL = $8802
+ACIA_COMMAND = $8803
+
+start
+  LDA #$4c     // store the instruction "JMP $5000 at $5000"
+  STA $5000
+  LDA #00
+  STA $5001
+  LDA #$50
+  STA $5002
+
+
+main
+init_acia
+
+  lda #%00001011		;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+
+  lda ACIA_COMMAND
+  cmp #%00001011
+  beq success
+
+failure
+  JMP $5000
+
+success
+  JMP success
+
+
+text:            .byte "Hello World!", $0d, $0a, $00
