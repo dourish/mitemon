@@ -13,6 +13,12 @@
 // (for simulator, ACIA at 8800)
 //
 
+ACIA_DATA    = $8000
+ACIA_STATUS  = $8001
+ACIA_CONTROL = $8002
+ACIA_COMMAND = $8003
+
+
 // Conventions in this code (memory usage etc):
 // Scratchpad at $00A0 - $00AF
 // JSR "trampoline" at ??
@@ -22,6 +28,8 @@
 // Major entry points:
 // (what do i need? init? process a command? wait for a command?
 //
+
+* = $C000
 
 
 // initialize the processor. set up the stack. initialize ACIA.
@@ -243,6 +251,11 @@ outchar                       // write out character stored at $00B0
   sta ACIA_DATA
   rts
   
+// printstring
+// read a mull-terminated string that's pointed to by $00C0 and $00C1
+// and write it to the output.
+// string should be max 255 characters
+//
 printstring
   LDX #0
 printnext
@@ -252,7 +265,33 @@ printnext
   JSR outchar
 printdone
   RTS
+  
+// readstring
+// read a string into the buffer at $0200.
+// echoes characters as it goes?
+readstring
+  LDY #0                    // use Y to index the buffer as we go
+readnextchar
+  JSR readchar
+  // echo it
+  // quit if newline
+  CMP #$0A                  // $0A is newline
+  BEQ endreadstring
+  // add it
+  STA ($0200),Y             // add character to buffer and increment pointer
+  INY
+  BEQ returnreadstring      // stop if Y wraps
+  // repeat
+  JMP readnextchar
+endreadstring
+  LDA #0
+  STA ($0200),Y             // null terminate instead of storing newline
+returnreadstring
+  RTS
+  
 
+// text constants
+//
 
 helloworld
             .byte "Hello World!", $0d, $0a, $00
