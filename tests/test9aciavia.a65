@@ -1,0 +1,167 @@
+// Basic test for 6551 ACIA, using the VIA to track progress.
+//
+// Paul Dourish, January 1, 2017
+//
+
+* = $C000
+
+// ACIA (6551) registers
+//
+ACIA_DATA    = $8000
+ACIA_STATUS  = $8001
+ACIA_CONTROL = $8002
+ACIA_COMMAND = $8003
+
+// VIA (6522) registers
+//
+VIA_PORTB = $8000
+VIA_PORTA = $8001
+VIA_DDRB  = $8002
+VIA_DDRA  = $8003
+VIA_T1CL  = $8004
+VIA_T1CH  = $8005
+VIA_T1LL  = $8006
+VIA_T1LH  = $8007
+VIA_T2LL  = $8008
+VIA_T2CL  = $8008
+VIA_T2CH  = $8009 
+VIA_SR    = $800A
+VIA_ACR   = $800B
+VIA_PCR   = $800C
+VIA_IFR   = $800D
+VIA_IER   = $800E
+VIA_ORAX  = $C20F
+
+init
+  LDX #255         // initialize the stack
+  TXS
+  CLD              // clear decimal mode
+  SEI              // disable interrupts
+
+  // set up the via
+  //
+  LDA #%11111111   // Set port A to all outputs
+  STA VIA_DDRA
+
+main
+  // first, clear the VIA output
+  LDA #0
+  STA status
+  STA VIA_PORTA
+
+  // initialize the ACIA registers
+  lda #%00001011		;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+
+  // set the first output just to show that something's happening
+  LDA status
+  AND #1
+  STA status
+  STA VIA_PORTA
+
+  // now check the register
+  lda ACIA_COMMAND
+  cmp #%00001011
+  beq good1     // so far, so good
+
+  JMP failure
+
+good1
+  // start off by signalling that we got this far
+  LDA status
+  AND #2
+  STA status
+  STA VIA_PORTA
+
+  lda #%00011111                ;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+  lda ACIA_CONTROL
+  cmp  #%00011111                ;1 stop bit, 8 data bits, 19200 baud
+  beq good2
+  JMP failure
+
+good2
+  // one more light for good behaviour
+  LDA status
+  AND #4
+  STA status
+  STA VIA_PORTA
+
+  // now try to write a message
+  //
+  LDX #0
+
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+
+  // signal that we got past the loop
+  LDA status
+  AND #8
+  STA status
+  STA VIA_PORTA
+
+  lda text,x
+  beq good3
+  sta ACIA_DATA
+  inx
+  jmp next_char
+
+good3
+  // signal that we got through the whole string output
+  LDA status
+  AND #16
+  STA status
+  STA VIA_PORTA
+
+  // now we're going to try reading
+  //
+
+read
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+
+  // signal that we got some input
+  LDA status
+  AND #32
+  STA status
+  STA VIA_PORTA
+
+
+  // latch the VIA to the input pattern
+  // then just loop around writing and latching
+  //
+  lda ACIA_DATA
+  sta VIA_PORTA
+
+write2
+   LDX #0
+next_char2
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+
+  lda text,x
+  beq good4
+  sta ACIA_DATA
+  inx
+  jmp next_char2
+
+read2
+wait_rxd_full2
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full2
+  lda ACIA_DATA
+  jmp write2
+
+
+failure
+  JMP failure
+
