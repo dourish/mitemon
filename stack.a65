@@ -1,0 +1,48 @@
+;; 16-bit stack stuff
+
+;; we push from (and pop into) a location marked as stackaccess and stackaccess+1
+
+Rather like the hadware stack, this stack lives on a dedicated page, and grows
+downwards. Unlike the regular stack, this one is a 16-bit stack, used for
+operands and parameters.
+
+stackpage specifies which page we use; stackptr keeps track of the next location,
+so the next byte will be recorded at stackpage+stackptr
+
+We put things on little-endian, in the usual manner.
+
+stackaccess = $00FO
+stackpage   = $0200
+stackptr    = $FF
+
+push
+phx
+ldx stackptr
+lda stackaccess
+sta stackpage,x
+dex
+lda stackaccess+1
+sta stackpage,x
+dex
+stx stackptr
+plx
+rts
+
+pop
+phx
+ldx stackptr
+dex
+lda stackpage,x
+sta stackaccess+1
+dex
+lda stackpage,x
+sta stackaccess
+stx stackptr
+plx
+rts
+
+
+dup
+
+swap
+

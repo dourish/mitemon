@@ -5,32 +5,7 @@
 
 * = $C000
 
-// ACIA (6551) registers
-//
-ACIA_DATA    = $8000
-ACIA_STATUS  = $8001
-ACIA_CONTROL = $8002
-ACIA_COMMAND = $8003
-
-// VIA (6522) registers
-//
-VIA_PORTB = $8000
-VIA_PORTA = $8001
-VIA_DDRB  = $8002
-VIA_DDRA  = $8003
-VIA_T1CL  = $8004
-VIA_T1CH  = $8005
-VIA_T1LL  = $8006
-VIA_T1LH  = $8007
-VIA_T2LL  = $8008
-VIA_T2CL  = $8008
-VIA_T2CH  = $8009 
-VIA_SR    = $800A
-VIA_ACR   = $800B
-VIA_PCR   = $800C
-VIA_IFR   = $800D
-VIA_IER   = $800E
-VIA_ORAX  = $C20F
+#include "../decl.a65"
 
 init
   LDX #255         // initialize the stack
