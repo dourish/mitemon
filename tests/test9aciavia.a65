@@ -30,7 +30,7 @@ main
 
   // set the first output just to show that something's happening
   LDA status
-  AND #1
+  ORA #1
   STA status
   STA VIA_PORTA
 
@@ -44,7 +44,7 @@ main
 good1
   // start off by signalling that we got this far
   LDA status
-  AND #2
+  ORA #2
   STA status
   STA VIA_PORTA
 
@@ -59,7 +59,7 @@ good1
 good2
   // one more light for good behaviour
   LDA status
-  AND #4
+  ORA #4
   STA status
   STA VIA_PORTA
 
@@ -75,7 +75,7 @@ wait_txd_empty
 
   // signal that we got past the loop
   LDA status
-  AND #8
+  ORA #8
   STA status
   STA VIA_PORTA
 
@@ -88,7 +88,7 @@ wait_txd_empty
 good3
   // signal that we got through the whole string output
   LDA status
-  AND #16
+  ORA #16
   STA status
   STA VIA_PORTA
 
@@ -103,7 +103,7 @@ wait_rxd_full
 
   // signal that we got some input
   LDA status
-  AND #32
+  ORA #32
   STA status
   STA VIA_PORTA
 
