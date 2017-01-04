@@ -1,0 +1,109 @@
+;; Calculate primes 0-255 via the sieve of eratosthenes
+;; loop through the results on LEDs connected to the VIA.
+;;
+;; Paul Dourish, January 3, 2017
+;;
+
+; 6522 Chip registers
+VIA_PORTB = $8000
+VIA_PORTA = $8001
+VIA_DDRB  = $8002
+VIA_DDRA  = $8003
+VIA_T1CL  = $8004
+VIA_T1CH  = $8005
+VIA_T1LL  = $8006
+VIA_T1LH  = $8007
+VIA_T2LL  = $8008
+VIA_T2CL  = $8008
+VIA_T2CH  = $8009 
+VIA_SR    = $800A
+VIA_ACR   = $800B
+VIA_PCR   = $800C
+VIA_IFR   = $800D
+VIA_IER   = $800E
+VIA_ORAX  = $C20F
+
+; variables
+datapage = $0400
+value = $00f0
+
+init
+  LDX #255         // initialize the stack
+  TXS
+  CLD              // clear decimal mode
+  SEI              // disable interrupts
+
+setupvia
+  LDA #%11111111   // Set port A to all outputs
+  STA VIA_DDRA
+
+
+;; zero out a page of data. we use this to keep track of values
+;; that have been eliminated.
+  ldx #255
+zeroloop
+  stz datapage,x
+  dex
+  bne zeroloop
+
+;; ignore 0 and 1, neither of which are prime.
+  lda #1
+  ldx #0
+  sta datapage,x
+  inx
+  sta datapage,x
+
+;; step through each possible value. if it's a 0 in the table, then it's
+;; prime, in which case we should eliminate all its multiples from the table
+;; x is our index as we step through the table.
+mainloop
+  inx
+  beq finish                   ; when we loop around, we're done
+  lda datapage,x               ; if it's zero, it's prime
+  bne mainloop
+  
+  ;; x is prime, so cancel out multiples, which we find by successive addition
+  stx value                    ; cache a copy
+  txa
+multloop
+  adc value                    ; find the next multiple
+  bcs done                     ; bail when we exceed 255
+  tay
+  lda #1
+  sta datapage,y
+  tya
+  jmp multloop
+
+done 
+  clc     
+  jmp mainloop
+
+
+;; once we've identified the primes, start to display them. ends in infinite loop.
+;;
+finished
+  clc
+  ldx #0
+  ;; set up ACIA here
+displayloop
+  lda datapage,x
+  bne next
+  sta ACIA_PORTA
+  jsr longpause
+next
+  inx
+  bcs finished
+  jmp displayloop
+      
+
+// a "longpause" is about a second at 500 kHz.
+longpause
+  LDX #255
+longouter
+  LDY #255
+longinner
+  DEY
+  BNE longinner
+  DEX
+  BNE longouter
+  RTS

@@ -2,47 +2,57 @@
 
 ;; we push from (and pop into) a location marked as stackaccess and stackaccess+1
 
-Rather like the hadware stack, this stack lives on a dedicated page, and grows
-downwards. Unlike the regular stack, this one is a 16-bit stack, used for
-operands and parameters.
+;; Rather like the hadware stack, this stack lives on a dedicated page, and grows
+;; downwards. Unlike the regular stack, this one is a 16-bit stack, used for
+;; operands and parameters.
 
-stackpage specifies which page we use; stackptr keeps track of the next location,
-so the next byte will be recorded at stackpage+stackptr
+;; stackpage specifies which page we use; stackptr keeps track of the next location,
+;; so the next byte will be recorded at stackpage+stackptr
 
-We put things on little-endian, in the usual manner.
+;; We put things on little-endian, in the usual manner.
 
 stackaccess = $00FO
 stackpage   = $0200
 stackptr    = $FF
 
 push
-phx
-ldx stackptr
-lda stackaccess
-sta stackpage,x
-dex
-lda stackaccess+1
-sta stackpage,x
-dex
-stx stackptr
-plx
-rts
+  phx                        ; we use x as index, so stash it
+  ldx stackptr               
+  lda stackaccess            ; first byte
+  sta stackpage,x
+  dex
+  lda stackaccess+1          ; second byte
+  sta stackpage,x
+  dex
+  stx stackptr               ; update stack pointer
+  plx                        ; restore x
+  rts
 
 pop
-phx
-ldx stackptr
-dex
-lda stackpage,x
-sta stackaccess+1
-dex
-lda stackpage,x
-sta stackaccess
-stx stackptr
-plx
-rts
-
+  phx                         ; stash x for safekeeping
+  ldx stackptr                ; use x as temporary stack pointer
+  dex                         ; stackptr signals next AVALABLE space so dec first
+  lda stackpage,x             ; retrieve first byte (second of the two that were stored)
+  sta stackaccess+1
+  dex
+  lda stackpage,x             ; retrieve second byte
+  sta stackaccess
+  stx stackptr                ; update the stack pointer
+  plx                         ; restore x
+  rts
 
 dup
+  phx
+  ldx stackptr
+  lda stackpage,x
+  sta stackpage-2,x
+  lda stackpage+1,x
+  sta stackpage-1,x            ; stackpage-1, ie, stackpage-2 + 1
+  dex
+  dex
+  stx stackptr
+  plx
+  rts
 
 swap
 
