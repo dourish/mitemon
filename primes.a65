@@ -90,7 +90,7 @@ finish
 displayloop
   lda datapage,x
   bne next
-  sta VIA_PORTA
+  stx VIA_PORTA
   txa
   pha
   jsr longpause
