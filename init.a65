@@ -1,0 +1,12 @@
+;; Generic initialization code
+;;
+
+init
+  LDX #255         // initialize the stack
+  TXS
+  CLD              // clear decimal mode
+  SEI              // disable interrupts
+
+setupvia
+  LDA #%11111111   // Set port A to all outputs
+  STA VIA_DDRA

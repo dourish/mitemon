@@ -1,0 +1,261 @@
+;; Combined memory and ACIA test. Results signaled via VIA.
+;; First, runs a basic memory test and signals progress/results via
+;; VIA. Then proceeds to ACIA test, using VIA to signal progress.
+;;
+;; Paul Dourish, January 6, 2017
+
+
+;; load definitions
+;;
+#include "../decl.a65"
+
+;; need to set origin before we load initialization code
+;;
+* = $C000
+
+;; load standard initialization code -- stack, modes, VIA
+;;
+#include "../init.a65"
+
+pagebase = $00a0
+
+;; testing a page of memory successfully takes ~1/100th of a second
+;; at 0.5MHz. There's 128 pages of RAM, so around 1.5s total. in other
+;; words, not enough time to give any useful feedback really unless
+;; we insert beats.
+;;
+
+memtest
+  lda #00
+  sta pagebase
+  lda #02                  ; start at page 02
+  sta pagebase+1
+
+pageloop
+  lda pagebase+1           ; 4 cycles 
+  cmp #C0                  ; 2 cycles
+  beq endmemtest           ; 2 cycles (not talken)
+
+pagetest                   ; loop is 11 cycles, * 255, 2805 total
+  ldx #255                 ; 2 cycles
+.(
+loop
+  lda #%01010101           ; 2 cycles
+  sta pagebase,x           ; 4 cycles
+  dex                      ; 2 cycles
+  bne loop                 ; 3 cycles (taken)
+.)
+
+  ldx #255
+.(
+loop                       ; loop is 13 cycles, * 255, 3315 total
+  lda pagebase,x           ; 4 cycles
+  cmp #%01010101           ; 2 cycles
+  bne fail                 ; 2 cycles (not taken)
+  dex                      ; 2 cycles
+  bne loop                 ; 3 cycles (taken)
+.)
+
+  ;; signal success somehow? or is no news good news?
+  jmp nextpage
+
+fail
+  jmp failmemtest
+
+nextpage
+  inc pagebase+1
+  jmp pageloop
+
+
+;; use the via to signal the page on which we failed. i just copy/paste
+;; this out five times rather than loop because laziness.
+;;
+failmemtest
+  lda pagebase+1
+  sta VIA_PORTA
+  jsr longpause
+  lda #00
+  sta VIA_PORTA
+  jsr shortpause
+
+  lda pagebase+1
+  sta VIA_PORTA
+  jsr longpause
+  lda #00
+  sta VIA_PORTA
+  jsr shortpause
+
+  lda pagebase+1
+  sta VIA_PORTA
+  jsr longpause
+  lda #00
+  sta VIA_PORTA
+  jsr shortpause
+
+  lda pagebase+1
+  sta VIA_PORTA
+  jsr longpause
+  lda #00
+  sta VIA_PORTA
+  jsr shortpause
+
+  lda pagebase+1
+  sta VIA_PORTA
+  jsr longpause
+  lda #00
+  sta VIA_PORTA
+  jsr shortpause
+
+;; it's all over now, baby blue
+;;
+endmemtest
+
+;; begin the acia test
+;;  
+main
+  // first, clear the VIA output
+  LDA #0
+  STA status
+  STA VIA_PORTA
+
+  // initialize the ACIA registers
+  lda #%00001011                ;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+
+  // set the first output just to show that something's happening
+  LDA status
+  ORA #1
+  STA status
+  STA VIA_PORTA
+
+  // now check the register
+  lda ACIA_COMMAND
+  cmp #%00001011
+  beq good1     // so far, so good
+
+  JMP failure
+
+good1
+  // start off by signalling that we got this far
+  LDA status
+  ORA #2
+  STA status
+  STA VIA_PORTA
+
+  lda #%00011111                ;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+  lda ACIA_CONTROL
+  cmp  #%00011111                ;1 stop bit, 8 data bits, 19200 baud
+  beq good2
+  JMP failure
+
+good2
+  // one more light for good behaviour
+  LDA status
+  ORA #4
+  STA status
+  STA VIA_PORTA
+
+  // now try to write a message
+  //
+  LDX #0
+
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+
+  // signal that we got past the loop
+  LDA status
+  ORA #8
+  STA status
+  STA VIA_PORTA
+
+  lda text,x
+  beq good3
+  sta ACIA_DATA
+  inx
+  jmp next_char
+
+good3
+  // signal that we got through the whole string output
+  LDA status
+  ORA #16
+  STA status
+  STA VIA_PORTA
+
+  // now we're going to try reading
+  //
+
+read
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+
+  // signal that we got some input
+  LDA status
+  ORA #32
+  STA status
+  STA VIA_PORTA
+
+  // latch the VIA to the input pattern
+  // then just loop around writing and latching
+  //
+  lda ACIA_DATA
+  sta VIA_PORTA
+
+write2
+   LDX #0
+next_char2
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+
+  lda text,x
+  beq good4
+  sta ACIA_DATA
+  inx
+  jmp next_char2
+
+read2
+wait_rxd_full2
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full2
+  lda ACIA_DATA
+  jmp write2
+
+
+failure
+  JMP failure
+
+
+// a "longpause" is about half a second at 1MHz.
+longpause
+  LDX #255
+longouter
+  LDY #255
+longinner
+  DEY
+  BNE longinner
+  DEX
+  BNE longouter
+  RTS
+
+// a "shorpause" is about a third of a long pause.
+shortpause
+  LDX #85
+shortouter
+  LDY #255
+shortinner
+  DEY
+  BNE shortinner
+  DEX
+  BNE shortouter
+  RTS
+
+
