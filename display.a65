@@ -1,0 +1,120 @@
+;; Controlling LCD display
+;; code from Chris Ward via 6502.org
+;;
+
+ZPDATA    EQU $00             ;zero-page data area
+LCD       EQU $D300           ;LCD module address
+
+          ORG LCD
+LCD0      .ds 1
+LCD1      .ds 1
+
+          ORG ZPDATA
+MSGBASE   .ds 2     ;address of message to print on LCD
+
+
+; *** LCD initialisation
+LINIT     LDX #$04            ;do function set 4 times
+LINIT0    LDA #$38            ;function set: 8 bit, 2 lines, 5x7
+          STA LCD0
+          JSR LCDBUSY         ;wait for busy flag to clear
+          DEX
+          BNE LINIT0
+          LDA #$06            ;entry mode set: increment, no shift
+          STA LCD0
+          JSR LCDBUSY
+          LDA #$0E            ;display on, cursor on, blink off
+          STA LCD0
+          JSR LCDBUSY
+          LDA #$01            ;clear display
+          STA LCD0
+          JSR LCDBUSY
+          LDA #$80            ;DDRAM address set: $00
+          STA LCD0
+          JSR LCDBUSY
+          RTS
+LINITMSG  fcs "LCD init done. "
+          .byte $00
+
+
+; *** Clear LCD display and return cursor to home
+; registers preserved
+LCDCLEAR  PHA
+          LDA #$01
+          STA LCD0
+          JSR LCDBUSY
+          LDA #$80
+          STA LCD0
+          JSR LCDBUSY
+          PLA
+          RTS
+
+; *** Print character on LCD (40 character)
+; registers preserved
+LCDPRINT  PHA
+          STA LCD1            ;output the character
+          JSR LCDBUSY
+          LDA LCD0            ;get current DDRAM address
+          AND #$7F
+          CMP #$14            ;wrap from pos $13 (line 1 char 20)...
+          BNE LCDPRINT0
+          LDA #$C0            ;...to $40 (line 2 char 1)
+          STA LCD0
+          JSR LCDBUSY
+LCDPRINT0 PLA
+          RTS
+
+
+; *** Print 2 digit hex number on LCD
+; A, X registers preserved
+LCDHEX    PHA
+          LSR A               ;shift high nybble into low nybble
+          LSR A
+          LSR A
+          LSR A
+          TAY
+          LDA HEXASCII,Y      ;convert to ASCII
+          JSR LCDPRINT        ;print value on the LCD
+          PLA                 ;restore original value
+          PHA
+          AND #$0F            ;select low nybble
+          TAY
+          LDA HEXASCII,Y      ;convert to ASCII
+          JSR LCDPRINT        ;print value on the LCD
+          PLA
+          RTS
+
+; *** Lookup table for HEX to ASCII
+HEXASCII     fcs "0123456789ABCDEF"
+
+
+;;'LCDSTRING' makes use of 'LCDPRINT' to display an entire string on the
+;; LCD. Before calling the function, store the address of your string
+;; in 'MSGBASE'.
+
+; *** Print string on LCD
+; registers preserved
+LCDSTRING PHA                 ;save A, Y to stack
+          TYA
+          PHA
+          LDY #$00
+LCDSTR0   LDA (MSGBASE),Y
+          BEQ LCDSTR1
+          JSR LCDPRINT
+          INY
+          BNE LCDSTR0
+LCDSTR1   PLA                 ;restore A, Y
+          TAY
+          PLA
+          RTS
+
+;; Here is an example of how to call the 'LCDSTRING' function.
+
+MEMMSG1   fcs "Memory test... "
+          .byte $00           ;terminating null for string
+
+          LDA #MEMMSG1
+          STA MSGBASE         ;store high byte of message address
+          LDA #MEMMSG1/256
+          STA MSGBASE+1       ;store low byte of message address
+          JSR LCDSTRING       ;print message
