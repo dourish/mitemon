@@ -41,25 +41,25 @@ pageloop
   lda pagebase+1           ; 4 cycles 
   ; end at page $80
   cmp #$80                 ; 2 cycles
-  beq endmemtest           ; 2 cycles (not talken)
+  beq endmemtest           ; 2 cycles (not taken)
 
-pagetest                   ; loop is 11 cycles, * 255, 2805 total
-  ldx #255                 ; 2 cycles
+pagetest                   ; loop is 13 cycles, * 255, 3315 total
+  ldy #255                 ; 2 cycles
 .(
 loop
   lda #%01010101           ; 2 cycles
-  sta pagebase,x           ; 4 cycles
-  dex                      ; 2 cycles
+  sta (pagebase),y         ; 6 cycles
+  dey                      ; 2 cycles
   bne loop                 ; 3 cycles (taken)
 .)
 
-  ldx #255
+  ldy #255
 .(
-loop                       ; loop is 13 cycles, * 255, 3315 total
-  lda pagebase,x           ; 4 cycles
+loop                       ; loop is 15 cycles, * 255, 3825 total
+  lda (pagebase),y         ; 6 cycles
   cmp #%01010101           ; 2 cycles
   bne fail                 ; 2 cycles (not taken)
-  dex                      ; 2 cycles
+  dey                      ; 2 cycles
   bne loop                 ; 3 cycles (taken)
 .)
 
