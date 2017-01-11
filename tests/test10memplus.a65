@@ -20,6 +20,11 @@
 pagebase = $00a0
 status   = $00a2
 
+;; turn on all the lights to signal that we're doing the memory test
+
+  lda #$FF
+  STA VIA_PORTA
+
 ;; testing a page of memory successfully takes ~1/100th of a second
 ;; at 0.5MHz. There's 128 pages of RAM, so around 1.5s total. in other
 ;; words, not enough time to give any useful feedback really unless
@@ -29,12 +34,13 @@ status   = $00a2
 memtest
   lda #00
   sta pagebase
-  lda #02                  ; start at page 02
+  lda #$02                 ; start at page 02
   sta pagebase+1
 
 pageloop
   lda pagebase+1           ; 4 cycles 
-  cmp #$C0                 ; 2 cycles
+  ; end at page $80
+  cmp #$80                 ; 2 cycles
   beq endmemtest           ; 2 cycles (not talken)
 
 pagetest                   ; loop is 11 cycles, * 255, 2805 total
