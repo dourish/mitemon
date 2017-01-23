@@ -1,20 +1,20 @@
-// Declarations of general use
-// Mainly, these define where things are in the memory map of the
-// 6502 Mite.
-//
-// Paul Dourish, January 1, 2017
-//
+;; Declarations of general use
+;; Mainly, these define where things are in the memory map of the
+;; 6502 Mite.
+;;
+;; Paul Dourish, January 1, 2017
+;;
 
 
-// ACIA (6551) registers
-//
-ACIA_DATA    = $8000
-ACIA_STATUS  = $8001
-ACIA_CONTROL = $8002
-ACIA_COMMAND = $8003
+;; ACIA (6551) registers
+;;
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_CONTROL = $8802
+ACIA_COMMAND = $8803
 
-// VIA (6522) registers
-//
+;; VIA (6522) registers
+;;
 VIA_PORTB = $8000
 VIA_PORTA = $8001
 VIA_DDRB  = $8002
@@ -31,5 +31,8 @@ VIA_ACR   = $800B
 VIA_PCR   = $800C
 VIA_IFR   = $800D
 VIA_IER   = $800E
-VIA_ORAX  = $C20F
+VIA_ORAX  = $800F
+
+;; LCD/HD44780 registers?
+;;
 

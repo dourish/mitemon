@@ -21,7 +21,7 @@ VIA_ACR   = $800B
 VIA_PCR   = $800C
 VIA_IFR   = $800D
 VIA_IER   = $800E
-VIA_ORAX  = $C20F
+VIA_ORAX  = $800F
 
 ; variables
 datapage = $0400
