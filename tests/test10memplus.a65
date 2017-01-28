@@ -184,12 +184,20 @@ wait_txd_empty
   beq good3
   sta ACIA_DATA
   inx
+
+  // signal that we got a character out
+  LDA status
+  ORA #16
+  STA status
+  STA VIA_PORTA
+
+
   jmp next_char
 
 good3
   // signal that we got through the whole string output
   LDA status
-  ORA #16
+  ORA #32
   STA status
   STA VIA_PORTA
 
@@ -204,7 +212,7 @@ wait_rxd_full
 
   // signal that we got some input
   LDA status
-  ORA #32
+  ORA #64
   STA status
   STA VIA_PORTA
 
@@ -230,7 +238,7 @@ wait_txd_empty2
 
 good4
   LDA status
-  ORA #64
+  ORA #128
   STA status
   STA VIA_PORTA
 
