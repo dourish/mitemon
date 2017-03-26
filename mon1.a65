@@ -1,0 +1,81 @@
+
+* = $C000
+
+
+#include "decl.a65"
+
+#include "init.a65"
+
+input=$0400  
+
+main
+init_acia
+
+  lda #%00001011		;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+;; print the welcome message
+
+write
+  ldx #0
+
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda welcome,x
+  beq outprompt
+  sta ACIA_DATA
+  inx
+  jmp next_char
+
+;; print a prompt
+
+outprompt
+
+;; read a line
+
+  ldx #0
+read
+wait_rxd_full	 
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+
+  lda ACIA_DATA
+  sta input,x
+  cmp #10
+  beq endline
+  inx
+  jmp read
+
+endline  
+
+;; respond
+
+respond
+  ldx #0
+
+next_char2
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda gottit,x
+  beq done2
+  sta ACIA_DATA
+  inx
+  jmp next_char2
+
+done2
+
+;; repeat
+
+  jmp outprompt
+
+
+welcome:            .byte "6502 Mite monitor v00", $0d, $0a, $00
+gottit:		    .byte "Gottit",  $0d, $0a, $00

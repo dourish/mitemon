@@ -191,6 +191,11 @@ wait_txd_empty
   STA status
   STA VIA_PORTA
 
+  // unset the "sending" light again for our next iteration
+  LDA status
+  AND #%11110111
+  STA status
+  STA VIA_PORTA
 
   jmp next_char
 
