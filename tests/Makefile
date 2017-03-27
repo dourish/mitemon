@@ -15,4 +15,3 @@ MKROM=mkrom
 	split -b 16384 $< `basename $< .rom`".x"
 
 
-mon1.a65: decl.a65 init.a65
