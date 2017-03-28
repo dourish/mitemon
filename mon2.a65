@@ -1,0 +1,103 @@
+;;
+;; Initial tests of monitor code for the 6502 Mite micro.
+;;
+;; Paul Dourish, March 2017
+;;
+
+* = $C000
+
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_CONTROL = $8802
+ACIA_COMMAND = $8803
+
+INPUT        = $4000
+
+main
+init_acia
+
+  lda #%00001011		;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+write
+  ldx #0
+
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda greeting,x
+  beq read
+  sta ACIA_DATA
+  inx
+  jmp next_char
+.)
+
+reploop
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda prompt
+  sta ACIA_DATA
+
+  ldx #0
+
+read
+wait_rxd_full	 
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+  lda ACIA_DATA
+  cmp #$0D           ; newline
+  beq done
+  sta INPUT,x
+  inx
+  jsr puta
+  jmp read
+
+done
+  jsr crlf
+  jsr reploop
+
+crlf
+  pha
+.(
+wait_txt_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda #$0d
+  sta ACIA_DATA
+.)
+.(
+wait_txt_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda #$0a
+  sta ACIA_DATA
+.)
+  pla
+  rts
+
+puta
+.(
+  pha
+wait_txt_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+greeting:	 .byte "6502 Mite monitor v00", $0d, $a, $00
+prompt:		 .byte "*"
+text:            .byte "Hello World!", $0d, $0a, $00
+char:		 .byte "."
