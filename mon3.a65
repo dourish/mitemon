@@ -1,0 +1,241 @@
+;;;
+;;; Initial tests of monitor code for the 6502 Mite micro.
+;;;
+;;; Paul Dourish, March 2017
+;;;
+
+* = $C000
+
+;ACIA_DATA    = $8800
+;ACIA_STATUS  = $8801
+;ACIA_CONTROL = $8802
+;ACIA_COMMAND = $8803
+
+;;;;;;;;;;;;;;;;;
+;;;
+;;; Include standard startup code
+;;;
+;;;;;;;;;;;;;;;;;
+
+#include "decl.a65"
+#include "init.a65"
+
+;;;;;;;;;;;;;;;;;
+;;;
+;;; Storage areas. A line of entered text is stored in INPUT. ARGINDEX
+;;; is used by the parser to record where each individual argument begins;
+;;; it is indexed by 1, and each value stores an offset into ARGINDEX
+;;; (ie. the first argument, which is almost always stored at INPUT[0],
+;;; is recorded as a zero value at ARGINDEX[1]. TMP1 is a scratch variable.
+;;;
+;;;;;;;;;;;;;;;;;;
+
+ARGINDEX     = $0040
+INPUT        = $4000
+TMP1         = $000A
+
+
+;;; CHECK -- isn't this in the startup/init code above?
+;;;
+main
+init_acia
+
+  lda #%00001011		;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+
+;;;
+;;; first, display a greeting
+;;;
+sayhello
+  ldx #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda greeting,x
+  beq reploop
+  sta ACIA_DATA
+  inx
+  jmp next_char
+.)
+
+
+;;;
+;;; now down to business. this is the main entrypoint for the
+;;; read/execution loop. print a prompt, read a line, parse, dispatch,
+;;; repeat.
+;;;
+reploop
+.(
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda prompt
+  sta ACIA_DATA
+.)
+  ldx #0
+
+read
+.(
+wait_rxd_full	 
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  cmp #$0D           ; check for newline
+  beq done
+  sta INPUT,x        ; track the input
+  inx
+  jsr puta           ; echo the typed character
+  jmp read           ; loop to repeat
+
+done
+  ;; this is where we land if the line input has finished
+  ;;
+  lda #$0
+  sta INPUT,x        ; null-terminate the string
+  jsr parsecmd
+  jsr crlf
+  jsr testparse      ; debugging output for test purposes
+  jmp reploop        ; loop around
+
+
+
+.byte "PAUL1"        ; I use this to find entry points in the memory view
+
+parsecmd
+  ldx #0
+  ldy #0
+
+;; look for non-space
+nextchar
+  lda INPUT,x
+  cmp #32
+  bne nonspace
+  inx
+  jmp nextchar
+
+;; mark the start of the word
+nonspace
+  iny      ; count of words in y
+  stx ARGINDEX,y
+;; look for space
+lookforspace
+  inx
+  lda INPUT,x
+  beq endofline       ; check for null termination
+  cmp #32             ; only looking for spaces. Tab?
+  beq endofword
+  jmp lookforspace
+;; didn't hit a terminator, so there must be more.
+;; terminate this word with a zero and then continue
+endofword
+  lda $0
+  sta INPUT,x         ; null-terminate
+  inx
+  jmp nextchar        ; repeat
+endofline
+  ;; we're done
+  ;; return
+  rts
+
+
+.byte "PAUL2"
+
+;;;
+;;; just for testing. echo arguments, backwards.
+;;;
+testparse
+  cpy #0               ; test for no arguments
+  beq donetestparse
+  iny                  ; add one to get a guard value
+  sty TMP1             ; store in TMP1. when we get to this value, we stop
+  ldy #1               ; start at 1
+nextarg
+  clc
+  tya                   ; grab the argument number
+  adc #$30              ; add 48 to make it an ascii value
+  jsr puta
+  lda #$3A              ; ascii for ":"
+  jsr puta
+  ldx ARGINDEX,y        ; load the index of the next argument into x
+nextletter
+  ;; print null-terminated string from INPUT+x
+  lda INPUT,x
+  beq donearg
+  jsr puta
+  inx
+  bne nextletter        ; use this as "branch always," will never be 0
+donearg
+  ;; output carriage return/line feed and see if there are more arguments
+  jsr crlf
+  iny
+  cpy TMP1
+  bne nextarg           ; not hit guard yet, so repeat
+donetestparse
+  rts
+
+
+
+;;;;;;;;;;;;;
+;;;
+;;; Various utility routines
+;;;
+;;;;;;;;;;;;;
+
+;;;
+;;; Ouptut carriage return and line feed
+;;;
+crlf
+  pha
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0d
+  sta ACIA_DATA
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0a
+  sta ACIA_DATA
+  pla
+  rts
+
+
+;;;
+;;; output the character code in the accumulator
+;;;
+puta
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+
+;;;
+;;; Various string constants
+;;;
+
+greeting:	 .byte "6502 Mite monitor v00", $0d, $0a, $00
+prompt:		 .byte "*"
+text:            .byte "Hello World!", $0d, $0a, $00
+char:		 .byte "."
