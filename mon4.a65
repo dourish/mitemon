@@ -28,7 +28,8 @@
 ;;; is used by the parser to record where each individual argument begins;
 ;;; it is indexed by 1, and each value stores an offset into ARGINDEX
 ;;; (ie. the first argument, which is almost always stored at INPUT[0],
-;;; is recorded as a zero value at ARGINDEX[1]. TMP1 is a scratch variable.
+;;; is recorded as a zero value at ARGINDEX[1]. ARGINDEX[0] is count.
+;;; TMP1 is a scratch variable.
 ;;;
 ;;;;;;;;;;;;;;;;;;
 
@@ -149,6 +150,8 @@ endofword
   jmp nextchar        ; repeat
 endofline
   ;; we're done
+  ;; cache the arg count
+  sty ARGINDEX
   ;; return
   rts
 .)
@@ -195,6 +198,11 @@ donetestparse
 ;;;
 ;;;;;;;;;;;;;
 
+;;; Dispatch table
+;;; each entry has a two-byte pointer to the next entry (or $0000 on end)
+;;; then a null-terminated string that names the command
+;;; then a two-type pointer for the code to execute the command
+;;;
 table
   .word table1
   .byte "about", $00
@@ -204,9 +212,13 @@ table1
   .byte "help", $00
   .word helpcmd
 table2
-  .word $0000            ; this signals it's the last entry in the table
+  .word table3
   .byte "dump", $00
   .word dumpcmd
+table3
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "echo", $00
+  .word echocmd
 
 .byte "PAUL3"
 
@@ -350,6 +362,32 @@ end
   rts
 .)
 
+echocmd
+.(
+  ldy #1                  ; start at 1 because we ignore the command itself
+echonext
+  cpy ARGINDEX            ; have we just done the last?
+  beq end                 ; yes, so end
+  iny                     ; no, so move on to the next
+  ldx ARGINDEX,y
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda INPUT,x
+  beq endofarg
+  sta ACIA_DATA
+  inx
+  jmp next_char
+endofarg
+  lda #32                  ; put a space at the end
+  jsr puta
+  jmp echonext
+end
+  jsr crlf                 ; carriage return/line feed
+  rts
+.)
 
 ;;;;;;;;;;;;;
 ;;;
