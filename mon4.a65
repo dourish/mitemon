@@ -214,7 +214,7 @@ table1
 table2
   .word table3
   .byte "dump", $00
-  .word dump2cmd
+  .word dumpcmd
 table3
   .word $0000            ; this signals it's the last entry in the table
   .byte "echo", $00
@@ -345,7 +345,7 @@ end
   rts
 .)
 
-dumpcmd
+notimplcmd
   ldx #0
 .(
 next_char
@@ -392,52 +392,207 @@ end
 
 .byte "PAUL4"
 
-dump2cmd
+;;;;;;;;;;;;
+;;;
+;;; We are doing this a dumb way. Don't bother generating and storing
+;;; the subtractand; just go ahead and do the job right away. save
+;;; space AND cycles
+;;;
+;;;;;;;;;;;;
+
+dumpcmd
 .(
-  ;; check arguments
+  ;; first, set the default number of bytes to output
+  lda #16
+  sta $00A4
+
+  ;; next, check arguments
   lda ARGINDEX
-  cmp #2
-  bne error
-  ;; turn first argument into an address
-  ;; CHECK -- THING THIS ONLY WORKS WITH DIGITS NOT ABCDEF!
+  cmp #2        ; only one parameter, so jump straight to decoding it
+  beq decode
+  cmp #3
+  beq arg2      ; two parameters so we decode the second first
+  jmp error     ; not two, not three, so there's an error of some sort
+arg2
+argdecode
+  ldx ARGINDEX+3
+  lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A4          ; assembling result here
+.)
+  inx
+  lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A4
+  sta $A4
+.)
+
+  ;; done with second parameter
+  ;; turn first parameter into an address
   ;;
   ;; here's the logic:
   ;; if char code < 0x40 then subtractand is 0x30
   ;; else if char code < 0x60 then subtractand is 0x37
   ;; else subtractand is 0x57
   ;;
+decode
   ldx ARGINDEX+2
   lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
   sec
-  sbc #48
+  sbc $00AE
   asl
   asl
   asl
   asl
   sta $A3          ; assembling result here
+.)
   inx
   lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
   sec
-  sbc #48
+  sbc $00AE
   clc
   adc $A3
   sta $A3
+.)
   inx
   lda INPUT,x      ; third nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
   sec
-  sbc #48
+  sbc $00AE
   asl
   asl
   asl
   asl
   sta $A2          ; assembling result here (little-endian, so earlier)
+.)
   inx
   lda INPUT,x      ; fourth nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
   sec
-  sbc #48
+  sbc $00AE
   clc
   adc $A2
   sta $A2
+.)
   ;; output address
   lda $A3
   jsr putax
@@ -446,7 +601,23 @@ dump2cmd
   ;; output colon
   lda #$3a         ; colon
   jsr puta
+
   ;; output each byte
+  ldx #0
+nextbyte
+  cpx $A4
+  beq end
+  ;; output a space
+  lda #32
+  jsr puta
+  ;; output the byte
+  stx $AF
+  ldy $AF
+  lda ($00A2),y
+  jsr putax
+  ;; next
+  inx
+  bne nextbyte      ; essentially branch always
   ;; crlf
   jmp end
 error
