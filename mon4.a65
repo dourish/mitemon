@@ -214,7 +214,7 @@ table1
 table2
   .word table3
   .byte "dump", $00
-  .word dumpcmd
+  .word dump2cmd
 table3
   .word $0000            ; this signals it's the last entry in the table
   .byte "echo", $00
@@ -389,6 +389,83 @@ end
   rts
 .)
 
+
+.byte "PAUL4"
+
+dump2cmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #2
+  bne error
+  ;; turn first argument into an address
+  ;; CHECK -- THING THIS ONLY WORKS WITH DIGITS NOT ABCDEF!
+  ;;
+  ;; here's the logic:
+  ;; if char code < 0x40 then subtractand is 0x30
+  ;; else if char code < 0x60 then subtractand is 0x37
+  ;; else subtractand is 0x57
+  ;;
+  ldx ARGINDEX+2
+  lda INPUT,x      ; first nybble
+  sec
+  sbc #48
+  asl
+  asl
+  asl
+  asl
+  sta $A3          ; assembling result here
+  inx
+  lda INPUT,x      ; second nybble
+  sec
+  sbc #48
+  clc
+  adc $A3
+  sta $A3
+  inx
+  lda INPUT,x      ; third nybble
+  sec
+  sbc #48
+  asl
+  asl
+  asl
+  asl
+  sta $A2          ; assembling result here (little-endian, so earlier)
+  inx
+  lda INPUT,x      ; fourth nybble
+  sec
+  sbc #48
+  clc
+  adc $A2
+  sta $A2
+  ;; output address
+  lda $A3
+  jsr putax
+  lda $A2
+  jsr putax
+  ;; output colon
+  lda #$3a         ; colon
+  jsr puta
+  ;; output each byte
+  ;; crlf
+  jmp end
+error
+  ;; do error
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda dumperrstring,x
+  beq end
+  sta ACIA_DATA
+  inx
+  jmp next_char
+end
+  jsr crlf
+  rts
+.)
+
 ;;;;;;;;;;;;;
 ;;;
 ;;; Various utility routines
@@ -435,14 +512,50 @@ wait_txd_empty
 .)
   rts
 
+;;;
+;;; output the value in the accumulator as a hex pattern
+;;;
+putax
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  rts
+
 
 ;;;
 ;;; Various string constants
 ;;;
 
+hextable:	 .byte "0123456789ABCDEF"
 greeting:	 .byte "6502 Mite monitor v04", $0d, $0a, $00
 prompt:		 .byte "*"
 helpstring:	 .byte "No clues...", $0d, $0a, $00
 errorstring:	 .byte "Command not recognized", $0d, $0a, $00
 implementstring: .byte "Not yet implemented", $0d, $0a, $00
+dumperrstring:   .byte "Usage: dump hexaddress [count:0f]", $00
 char:		 .byte "."
