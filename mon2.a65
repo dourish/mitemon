@@ -97,7 +97,7 @@ wait_txt_empty
 .)
   rts
 
-greeting:	 .byte "6502 Mite monitor v00", $0d, $a, $00
+greeting:	 .byte "6502 Mite monitor v00", $0d, $0a, $00
 prompt:		 .byte "*"
 text:            .byte "Hello World!", $0d, $0a, $00
 char:		 .byte "."
