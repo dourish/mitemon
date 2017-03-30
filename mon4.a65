@@ -1,7 +1,7 @@
 ;;;
 ;;; Initial tests of monitor code for the 6502 Mite micro.
 ;;; v3 parses command line arguments
-;;; v4 does basic command dispatch
+;;; v4 does basic command dispatch and some simple commands
 ;;;
 ;;; Paul Dourish, March 2017
 ;;;
@@ -40,8 +40,6 @@ ENTRY	     = $0080
 
 ;; using $00AA-$00AF as scratchpad
 
-;;; CHECK -- isn't this in the startup/init code above?
-;;;
 main
 init_acia
 
@@ -216,9 +214,13 @@ table2
   .byte "dump", $00
   .word dumpcmd
 table3
-  .word $0000            ; this signals it's the last entry in the table
+  .word table4
   .byte "echo", $00
   .word echocmd
+table4
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "poke", $00
+  .word pokecmd
 
 .byte "PAUL3"
 
@@ -621,6 +623,7 @@ nextbyte
   ;; crlf
   jmp end
 error
+  ldx #0
   ;; do error
 next_char
 wait_txd_empty  
@@ -628,6 +631,229 @@ wait_txd_empty
   and #$10
   beq wait_txd_empty
   lda dumperrstring,x
+  beq end
+  sta ACIA_DATA
+  inx
+  jmp next_char
+end
+  jsr crlf
+  rts
+.)
+
+
+;;;;;;;;;;;;
+;;;
+;;; We are doing this a dumb way. Don't bother generating and storing
+;;; the subtractand; just go ahead and do the job right away. save
+;;; space AND cycles
+;;;
+;;;;;;;;;;;;
+
+.byte "PAUL5"
+
+pokecmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #3
+  beq argdecode
+  jmp error     ; not three, so there's an error of some sort
+argdecode
+  ldx ARGINDEX+3
+  lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A4          ; assembling result here
+.)
+  inx
+  lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A4
+  sta $A4
+.)
+
+  ;; done with second parameter
+  ;; turn first parameter into an address
+  ;;
+  ;; here's the logic:
+  ;; if char code < 0x40 then subtractand is 0x30
+  ;; else if char code < 0x60 then subtractand is 0x37
+  ;; else subtractand is 0x57
+  ;;
+decode
+  ldx ARGINDEX+2
+  lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A3          ; assembling result here
+.)
+  inx
+  lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A3
+  sta $A3
+.)
+  inx
+  lda INPUT,x      ; third nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A2          ; assembling result here (little-endian, so earlier)
+.)
+  inx
+  lda INPUT,x      ; fourth nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A2
+  sta $A2
+.)
+  ;; after all that, now finally do the poke
+  lda $A4
+  ldx #0
+  sta ($A2,X)
+  jsr putax
+  jsr crlf
+  rts
+
+error
+  ldx #0
+  ;; do error
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda pokeerrstring,x
   beq end
   sta ACIA_DATA
   inx
@@ -729,4 +955,5 @@ helpstring:	 .byte "No clues...", $0d, $0a, $00
 errorstring:	 .byte "Command not recognized", $0d, $0a, $00
 implementstring: .byte "Not yet implemented", $0d, $0a, $00
 dumperrstring:   .byte "Usage: dump hexaddress [count:0f]", $00
+pokeerrstring:   .byte "Usage: poke hexaddress hexvalue", $00
 char:		 .byte "."
