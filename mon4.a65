@@ -641,47 +641,35 @@ end
 .)
 
 
-;;;;;;;;;;;;
-;;;
-;;; We are doing this a dumb way. Don't bother generating and storing
-;;; the subtractand; just go ahead and do the job right away. save
-;;; space AND cycles
-;;;
-;;;;;;;;;;;;
-
-.byte "PAUL5"
-
 pokecmd
 .(
   ;; check arguments
   lda ARGINDEX
   cmp #3
   beq argdecode
-  jmp error     ; not three, so there's an error of some sort
+  jmp error        ; not three, so there's an error of some sort
 argdecode
   ldx ARGINDEX+3
   lda INPUT,x      ; first nybble
 .(
   cmp #$60
   bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
 upper
   cmp #$40
   bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
+  ;; upper case character, so substract $37
   sec
-  sbc $00AE
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
   asl
   asl
   asl
@@ -693,24 +681,22 @@ start
 .(
   cmp #$60
   bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
 upper
   cmp #$40
   bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
+  ;; upper case character, so substract $37
   sec
-  sbc $00AE
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
   clc
   adc $A4
   sta $A4
@@ -730,24 +716,22 @@ decode
 .(
   cmp #$60
   bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
 upper
   cmp #$40
   bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
+  ;; upper case character, so substract $37
   sec
-  sbc $00AE
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
   asl
   asl
   asl
@@ -759,24 +743,22 @@ start
 .(
   cmp #$60
   bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
 upper
   cmp #$40
   bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
+  ;; upper case character, so substract $37
   sec
-  sbc $00AE
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
   clc
   adc $A3
   sta $A3
@@ -786,24 +768,22 @@ start
 .(
   cmp #$60
   bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
 upper
   cmp #$40
   bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
+  ;; upper case character, so substract $37
   sec
-  sbc $00AE
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
   asl
   asl
   asl
@@ -815,24 +795,22 @@ start
 .(
   cmp #$60
   bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
 upper
   cmp #$40
   bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
+  ;; upper case character, so substract $37
   sec
-  sbc $00AE
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
   clc
   adc $A2
   sta $A2
