@@ -37,8 +37,10 @@ ARGINDEX     = $0040
 INPUT        = $4000
 TMP1         = $000A
 ENTRY	     = $0080
+INDJSRVEC    = $0050
 
 ;; using $00AA-$00AF as scratchpad
+
 
 main
 init_acia
@@ -48,9 +50,8 @@ init_acia
   lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
   sta ACIA_CONTROL
 
-
 ;;;
-;;; first, display a greeting
+;;; next, display a greeting
 ;;;
 sayhello
   ldx #0
@@ -218,9 +219,13 @@ table3
   .byte "echo", $00
   .word echocmd
 table4
-  .word $0000            ; this signals it's the last entry in the table
+  .word table5
   .byte "poke", $00
   .word pokecmd
+table5
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "go", $00
+  .word gocmd
 
 .byte "PAUL3"
 
@@ -481,6 +486,7 @@ start
   ;; if char code < 0x40 then subtractand is 0x30
   ;; else if char code < 0x60 then subtractand is 0x37
   ;; else subtractand is 0x57
+  ;; leave two-byte result in $A2 and $A3
   ;;
 decode
   ldx ARGINDEX+2
@@ -841,6 +847,154 @@ end
   rts
 .)
 
+gocmd
+.(
+  lda ARGINDEX
+  cmp #2
+  beq decode
+  jmp error
+
+  ;; just grabbed this code from above for parsing a hexaddress
+decode
+  ldx ARGINDEX+2
+  lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A3          ; assembling result here
+.)
+  inx
+  lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A3
+  sta $A3
+.)
+  inx
+  lda INPUT,x      ; third nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A2          ; assembling result here (little-endian, so earlier)
+.)
+  inx
+  lda INPUT,x      ; fourth nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A2
+  sta $A2
+.)
+  lda $A2
+  sta INDJSRVEC
+  lda $A3
+  sta INDJSRVEC+1
+  jsr indjsr
+  jmp end
+error
+  ldx #0
+  ;; do error
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda goerrstring,x
+  beq enderr
+  sta ACIA_DATA
+  inx
+  jmp next_char
+enderr
+  jsr crlf
+end
+  rts
+.)
+
+
+
 ;;;;;;;;;;;;;
 ;;;
 ;;; Various utility routines
@@ -921,6 +1075,14 @@ wait_txd_empty2
 .)
   rts
 
+;;;
+;;; this is for doing indirect subroutine jumps. store the subroutine
+;;; address at $0050 and $0051, then do a JSR to here, causing a jump,
+;;; and when execution hits an RTS, it'll return to where the JSR was
+;;; executed.
+indjsr
+  jmp (INDJSRVEC)
+
 
 ;;;
 ;;; Various string constants
@@ -929,9 +1091,10 @@ wait_txd_empty2
 hextable:	 .byte "0123456789ABCDEF"
 greeting:	 .byte "6502 Mite monitor v04", $0d, $0a, $00
 prompt:		 .byte "*"
-helpstring:	 .byte "No clues...", $0d, $0a, $00
+helpstring:	 .byte "No clues... too easy!", $0d, $0a, $00
 errorstring:	 .byte "Command not recognized", $0d, $0a, $00
 implementstring: .byte "Not yet implemented", $0d, $0a, $00
 dumperrstring:   .byte "Usage: dump hexaddress [count:0f]", $00
 pokeerrstring:   .byte "Usage: poke hexaddress hexvalue", $00
+goerrstring:	 .byte "Usage: go hexaddress", $00
 char:		 .byte "."
