@@ -1,0 +1,115 @@
+// Basic input test for 6551 ACIA.
+//
+// Partly adapted from code at:
+// http://www.grappendorf.net/projects/6502-home-computer/acia-serial-interface-hello-world.html
+//
+// still attempting to debug the ACIA. here's the new strategy:
+// on startup, copy slow busy loops to $1000, $2000, and $4000 as subroutines
+// then jump to $1000 for a minute to do nothing (and signal it!)
+// then read and test an ACIA register
+// if it works, jump to $2000 for a minute to do nothing (and signal it)
+// then repeatedly
+// output a string via the ACIA
+// jump to $1000
+// output a string via the ACIA
+// jump to $2000
+// repeat
+
+* = $C000
+
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_CONTROL = $8802
+ACIA_COMMAND = $8803
+
+main
+
+; start with the copy
+;
+
+start
+  JMP copycode
+
+// delay by counting down X and Y 256^2 times
+//
+delaycode
+  LDX #255
+outer
+  LDY #255
+inner
+  DEY
+  BNE inner
+  DEX
+  BNE outer
+  RTS
+
+copycode        // copy "delaycode" code block from ROM into RAM
+  LDX #10
+copyloop:
+  LDA delaycode,X
+  STA $1000,X
+  STA $2000,X
+  STA $4000,X
+  DEX
+  BNE copyloop
+
+  LDA delaycode // zeroth instruction
+  STA $1000
+  STA $2000
+  STA $4000
+
+;
+; do nothing for a minite (visible on LEDs)
+;
+  JSR $1000
+
+;
+; now get the ACIA set up
+;
+init_acia
+
+  lda #%00001011		;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+; read back the data from the ACIA registers to make sure that it's cool
+;
+  LDA ACIA_COMMAND
+  CMP #%00001011		;No parity, no echo, no interrupt
+  BNE eror
+
+; signal success
+;
+  JSR $2000
+  JMP nexttest
+
+error
+  JMP error
+
+nexttest
+write
+  ldx #0
+
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda text,x
+  beq pause
+  sta ACIA_DATA
+  inx
+  jmp next_char
+
+  JSR $4000
+  JSR $2000
+
+  // go back to the output routine
+  JMP write
+	      
+
+text:            .byte "Hello World!", $0d, $0a, $00//
+
+
+
