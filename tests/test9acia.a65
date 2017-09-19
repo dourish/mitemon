@@ -85,6 +85,9 @@ init_acia
   JMP nexttest
 
 error
+  JSR $4000
+  JSR $2000
+  JSR $1000
   JMP error
 
 nexttest
