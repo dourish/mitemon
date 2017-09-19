@@ -95,10 +95,15 @@ write
   ldx #0
 
 next_char
+; temporarily, don't actually wait for empty
+; just delay a little
+  ldy #255
 wait_txd_empty  
   lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
+;  and #$10
+;  beq wait_txd_empty
+  dey
+  bne wait_txd_empty
   lda text,x
   beq pause
   sta ACIA_DATA
