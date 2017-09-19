@@ -77,7 +77,7 @@ init_acia
 ;
   LDA ACIA_COMMAND
   CMP #%00001011		;No parity, no echo, no interrupt
-  BNE eror
+  BNE error
 
 ; signal success
 ;
@@ -102,6 +102,7 @@ wait_txd_empty
   inx
   jmp next_char
 
+pause
   JSR $4000
   JSR $2000
 
