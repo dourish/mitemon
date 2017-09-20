@@ -17,10 +17,15 @@
 
 * = $C000
 
+// JESUS H. CHRIST ON A STICK!
+// I have had the Command and Control registers the wrong way around in
+// every single test I have done!
 ACIA_DATA    = $8800
 ACIA_STATUS  = $8801
-ACIA_CONTROL = $8802
-ACIA_COMMAND = $8803
+;ACIA_CONTROL = $8802
+;ACIA_COMMAND = $8803
+ACIA_COMMAND = $8802
+ACIA_CONTROL = $8803
 
 main
 
