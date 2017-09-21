@@ -1,0 +1,1095 @@
+;;;
+;;; Initial tests of monitor code for the 6502 Mite micro.
+;;; v3 parses command line arguments
+;;; v4 does basic command dispatch and some simple commands
+;;;
+;;; Paul Dourish, March 2017
+;;;
+
+* = $C000
+
+;;;;;;;;;;;;;;;;;
+;;;
+;;; Include standard startup code
+;;;
+;;;;;;;;;;;;;;;;;
+
+#include "decl.a65"
+#include "init.a65"
+
+;;;;;;;;;;;;;;;;;
+;;;
+;;; Storage areas. A line of entered text is stored in INPUT. ARGINDEX
+;;; is used by the parser to record where each individual argument begins;
+;;; it is indexed by 1, and each value stores an offset into ARGINDEX
+;;; (ie. the first argument, which is almost always stored at INPUT[0],
+;;; is recorded as a zero value at ARGINDEX[1]. ARGINDEX[0] is count.
+;;; TMP1 is a scratch variable.
+;;;
+;;;;;;;;;;;;;;;;;;
+
+ARGINDEX     = $0040
+INPUT        = $4000
+TMP1         = $000A
+ENTRY	     = $0080
+INDJSRVEC    = $0050
+
+;; using $00AA-$00AF as scratchpad
+SCRATCH      = $00AA
+
+main
+init_acia
+
+  lda #%00001011		;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+;;;
+;;; next, display a greeting
+;;;
+sayhello
+  ldx #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda greeting,x
+  beq reploop
+  sta ACIA_DATA
+  inx
+  jmp next_char
+.)
+
+
+;;;
+;;; now down to business. this is the main entrypoint for the
+;;; read/execution loop. print a prompt, read a line, parse, dispatch,
+;;; repeat.
+;;;
+reploop
+.(
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda prompt
+  sta ACIA_DATA
+.)
+  ldx #0
+
+read
+.(
+wait_rxd_full	 
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  cmp #$0D           ; check for newline
+  beq done
+  sta INPUT,x        ; track the input
+  inx
+  jsr puta           ; echo the typed character
+  jmp read           ; loop to repeat
+
+done
+  ;; this is where we land if the line input has finished
+  ;;
+  lda #$0
+  sta INPUT,x        ; null-terminate the string
+  jsr parsecmd
+  jsr crlf
+  ;;jsr testparse      ; debugging output for test purposes
+  jsr matchcommand   ; match and execute
+  jmp reploop        ; loop around
+
+
+
+.byte "PAUL1"        ; I use this to find entry points in the memory view
+
+parsecmd
+  ldx #0
+  ldy #0
+
+.(
+;; look for non-space
+nextchar
+  lda INPUT,x
+  cmp #32
+  bne nonspace
+  inx
+  jmp nextchar
+
+;; mark the start of the word
+nonspace
+  iny      ; count of words in y
+  stx ARGINDEX,y
+;; look for space
+lookforspace
+  inx
+  lda INPUT,x
+  beq endofline       ; check for null termination
+  cmp #32             ; only looking for spaces. Tab?
+  beq endofword
+  jmp lookforspace
+;; didn't hit a terminator, so there must be more.
+;; terminate this word with a zero and then continue
+endofword
+  lda $0
+  sta INPUT,x         ; null-terminate
+  inx
+  jmp nextchar        ; repeat
+endofline
+  ;; we're done
+  ;; cache the arg count
+  sty ARGINDEX
+  ;; return
+  rts
+.)
+
+.byte "PAUL2"
+
+;;;
+;;; just for testing. echo arguments, backwards.
+;;;
+testparse
+  cpy #0               ; test for no arguments
+  beq donetestparse
+  iny                  ; add one to get a guard value
+  sty TMP1             ; store in TMP1. when we get to this value, we stop
+  ldy #1               ; start at 1
+nextarg
+  clc
+  tya                   ; grab the argument number
+  adc #$30              ; add 48 to make it an ascii value
+  jsr puta
+  lda #$3A              ; ascii for ":"
+  jsr puta
+  ldx ARGINDEX,y        ; load the index of the next argument into x
+nextletter
+  ;; print null-terminated string from INPUT+x
+  lda INPUT,x
+  beq donearg
+  jsr puta
+  inx
+  bne nextletter        ; use this as "branch always," will never be 0
+donearg
+  ;; output carriage return/line feed and see if there are more arguments
+  jsr crlf
+  iny
+  cpy TMP1
+  bne nextarg           ; not hit guard yet, so repeat
+donetestparse
+  rts
+
+
+;;;;;;;;;;;;;
+;;;
+;;; Command lookup/dispatch
+;;;
+;;;;;;;;;;;;;
+
+;;; Dispatch table
+;;; each entry has a two-byte pointer to the next entry (or $0000 on end)
+;;; then a null-terminated string that names the command
+;;; then a two-type pointer for the code to execute the command
+;;;
+table
+  .word table1
+  .byte "about", $00
+  .word aboutcmd
+table1
+  .word table2
+  .byte "help", $00
+  .word helpcmd
+table2
+  .word table3
+  .byte "dump", $00
+  .word dumpcmd
+table3
+  .word table4
+  .byte "echo", $00
+  .word echocmd
+table4
+  .word table5
+  .byte "poke", $00
+  .word pokecmd
+table5
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "go", $00
+  .word gocmd
+
+.byte "PAUL3"
+
+matchcommand
+  lda #<table    ; low byte of table address
+  sta ENTRY
+  lda #>table    ; high byte of table address
+  sta ENTRY+1
+
+testentry
+cacheptr
+  ;; grab the pointer to the next entry and cache it in scratchpad
+  ldy #0
+  lda (ENTRY),Y  ; first byte
+  sta SCRATCH
+  iny
+  lda (ENTRY),Y  ; second byte
+  sta SCRATCH+1
+  iny
+  ldx #0         ;; will use X and Yas index for string
+.(
+nextchar
+  lda INPUT,x
+  beq endofword
+  cmp (ENTRY),y
+  bne nextentry
+  inx
+  iny
+  jmp nextchar
+.)
+
+endofword
+  ;; we got here because we hit the end of the word in the buffer
+  ;; if it's also the end of the entry label, then we've found the right place
+  lda (ENTRY),y
+  beq successful
+  ;; but if it's not, then we haven't.
+  ;; continue to the next entry
+  jmp nextentry
+
+successful
+  ;; we got a match! copy out the destination address, jump to it
+  iny
+  lda (ENTRY),Y
+  sta SCRATCH+2
+  iny
+  lda (ENTRY),Y
+  sta SCRATCH+3
+  ;; FIX -- how do we handle parameters?
+  jmp (SCRATCH+2)
+  rts  ;; never get here -- we rts from the command code
+    
+nextentry:
+  lda SCRATCH           ;; copy the address of next entry from scratchpad
+  sta ENTRY
+  lda SCRATCH+1
+  sta ENTRY+1
+  ;; test for null here
+  ora SCRATCH       ;; check if the entry was $0000
+  beq endoftable    ;; if so, we're at the end of table
+  jmp testentry
+
+endoftable
+  ;; got to the end of the table with no match
+  ;; print an error message, and return to line input
+  ;; ...
+
+printerror
+  ldx #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda errorstring,x
+  beq end
+  sta ACIA_DATA
+  inx
+  jmp next_char
+end
+  rts
+.)
+
+
+
+;;;;;;;;;;;;;
+;;;
+;;; Monitor commands
+;;;
+;;;;;;;;;;;;;
+
+aboutcmd
+  ldx #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda greeting,x
+  beq end
+  sta ACIA_DATA
+  inx
+  jmp next_char
+end
+  rts
+.)
+
+helpcmd
+  ldx #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda helpstring,x
+  beq end
+  sta ACIA_DATA
+  inx
+  jmp next_char
+end
+  rts
+.)
+
+notimplcmd
+  ldx #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda implementstring,x
+  beq end
+  sta ACIA_DATA
+  inx
+  jmp next_char
+end
+  rts
+.)
+
+echocmd
+.(
+  ldy #1                  ; start at 1 because we ignore the command itself
+echonext
+  cpy ARGINDEX            ; have we just done the last?
+  beq end                 ; yes, so end
+  iny                     ; no, so move on to the next
+  ldx ARGINDEX,y
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda INPUT,x
+  beq endofarg
+  sta ACIA_DATA
+  inx
+  jmp next_char
+endofarg
+  lda #32                  ; put a space at the end
+  jsr puta
+  jmp echonext
+end
+  jsr crlf                 ; carriage return/line feed
+  rts
+.)
+
+
+.byte "PAUL4"
+
+;;;;;;;;;;;;
+;;;
+;;; We are doing this a dumb way. Don't bother generating and storing
+;;; the subtractand; just go ahead and do the job right away. save
+;;; space AND cycles
+;;;
+;;;;;;;;;;;;
+
+dumpcmd
+.(
+  ;; first, set the default number of bytes to output
+  lda #16
+  sta $00A4
+
+  ;; next, check arguments
+  lda ARGINDEX
+  cmp #2        ; only one parameter, so jump straight to decoding it
+  beq decode
+  cmp #3
+  beq arg2      ; two parameters so we decode the second first
+  jmp error     ; not two, not three, so there's an error of some sort
+arg2
+argdecode
+  ldx ARGINDEX+3
+  lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A4          ; assembling result here
+.)
+  inx
+  lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A4
+  sta $A4
+.)
+
+  ;; done with second parameter
+  ;; turn first parameter into an address
+  ;;
+  ;; here's the logic:
+  ;; if char code < 0x40 then subtractand is 0x30
+  ;; else if char code < 0x60 then subtractand is 0x37
+  ;; else subtractand is 0x57
+  ;; leave two-byte result in $A2 and $A3
+  ;;
+decode
+  ldx ARGINDEX+2
+  lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A3          ; assembling result here
+.)
+  inx
+  lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A3
+  sta $A3
+.)
+  inx
+  lda INPUT,x      ; third nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A2          ; assembling result here (little-endian, so earlier)
+.)
+  inx
+  lda INPUT,x      ; fourth nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A2
+  sta $A2
+.)
+  ;; output address
+  lda $A3
+  jsr putax
+  lda $A2
+  jsr putax
+  ;; output colon
+  lda #$3a         ; colon
+  jsr puta
+
+  ;; output each byte
+  ldx #0
+nextbyte
+  cpx $A4
+  beq end
+  ;; output a space
+  lda #32
+  jsr puta
+  ;; output the byte
+  stx SCRATCH+5
+  ldy SCRATCH+5
+  lda ($00A2),y
+  jsr putax
+  ;; next
+  inx
+  bne nextbyte      ; essentially branch always
+  ;; crlf
+  jmp end
+error
+  ldx #0
+  ;; do error
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda dumperrstring,x
+  beq end
+  sta ACIA_DATA
+  inx
+  jmp next_char
+end
+  jsr crlf
+  rts
+.)
+
+
+pokecmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #3
+  beq argdecode
+  jmp error        ; not three, so there's an error of some sort
+argdecode
+  ldx ARGINDEX+3
+  lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  asl
+  asl
+  asl
+  asl
+  sta $A4          ; assembling result here
+.)
+  inx
+  lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  clc
+  adc $A4
+  sta $A4
+.)
+
+  ;; done with second parameter
+  ;; turn first parameter into an address
+  ;;
+  ;; here's the logic:
+  ;; if char code < 0x40 then subtractand is 0x30
+  ;; else if char code < 0x60 then subtractand is 0x37
+  ;; else subtractand is 0x57
+  ;;
+decode
+  ldx ARGINDEX+2
+  lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  asl
+  asl
+  asl
+  asl
+  sta $A3          ; assembling result here
+.)
+  inx
+  lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  clc
+  adc $A3
+  sta $A3
+.)
+  inx
+  lda INPUT,x      ; third nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  asl
+  asl
+  asl
+  asl
+  sta $A2          ; assembling result here (little-endian, so earlier)
+.)
+  inx
+  lda INPUT,x      ; fourth nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  clc
+  adc $A2
+  sta $A2
+.)
+  ;; after all that, now finally do the poke
+  lda $A4
+  ldx #0
+  sta ($A2,X)
+  jsr putax
+  jsr crlf
+  rts
+
+error
+  ldx #0
+  ;; do error
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda pokeerrstring,x
+  beq end
+  sta ACIA_DATA
+  inx
+  jmp next_char
+end
+  jsr crlf
+  rts
+.)
+
+gocmd
+.(
+  lda ARGINDEX
+  cmp #2
+  beq decode
+  jmp error
+
+  ;; just grabbed this code from above for parsing a hexaddress
+decode
+  ldx ARGINDEX+2
+  lda INPUT,x      ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A3          ; assembling result here
+.)
+  inx
+  lda INPUT,x      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A3
+  sta $A3
+.)
+  inx
+  lda INPUT,x      ; third nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  asl
+  asl
+  asl
+  asl
+  sta $A2          ; assembling result here (little-endian, so earlier)
+.)
+  inx
+  lda INPUT,x      ; fourth nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; we're lower case
+  ldy #$057
+  sty $00AE
+  jmp start
+upper
+  cmp #$40
+  bcc number
+  ;; we're upper case
+  ldy #$037
+  sty $00AE
+  jmp start
+number
+  ;; we're a number
+  ldy #$30
+  sty $00AE
+start  
+  sec
+  sbc $00AE
+  clc
+  adc $A2
+  sta $A2
+.)
+  lda $A2
+  sta INDJSRVEC
+  lda $A3
+  sta INDJSRVEC+1
+  jsr indjsr
+  jmp end
+error
+  ldx #0
+  ;; do error
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda goerrstring,x
+  beq enderr
+  sta ACIA_DATA
+  inx
+  jmp next_char
+enderr
+  jsr crlf
+end
+  rts
+.)
+
+
+
+;;;;;;;;;;;;;
+;;;
+;;; Various utility routines
+;;;
+;;;;;;;;;;;;;
+
+;;;
+;;; Ouptut carriage return and line feed
+;;;
+crlf
+  pha
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0d
+  sta ACIA_DATA
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0a
+  sta ACIA_DATA
+  pla
+  rts
+
+
+;;;
+;;; output the character code in the accumulator
+;;;
+puta
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+;;;
+;;; output the value in the accumulator as a hex pattern
+;;;
+putax
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  rts
+
+;;;
+;;; this is for doing indirect subroutine jumps. store the subroutine
+;;; address at $0050 and $0051, then do a JSR to here, causing a jump,
+;;; and when execution hits an RTS, it'll return to where the JSR was
+;;; executed.
+indjsr
+  jmp (INDJSRVEC)
+
+
+;;;
+;;; Various string constants
+;;;
+
+hextable:	 .byte "0123456789ABCDEF"
+greeting:	 .byte "6502 Mite monitor v05. Hi Paul.", $0d, $0a, $00
+prompt:		 .byte "*"
+helpstring:	 .byte "Commands available: echo, help, about, dump, poke, go", $0d, $0a, $00
+errorstring:	 .byte "Command not recognized", $0d, $0a, $00
+implementstring: .byte "Not yet implemented", $0d, $0a, $00
+dumperrstring:   .byte "Usage: dump hexaddress [count:0f]", $00
+pokeerrstring:   .byte "Usage: poke hexaddress hexvalue", $00
+goerrstring:	 .byte "Usage: go hexaddress", $00
+char:		 .byte "."
