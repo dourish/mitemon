@@ -1,58 +1,77 @@
 ;; 16-bit stack stuff
 
-;; we push from (and pop into) a location marked as stackaccess and stackaccess+1
+;; Rather like the hadware stack, this stack lives on a dedicated page, and
+;; grows downwards. Unlike the regular stack, this one is a 16-bit stack, used
+;; for operands and parameters.
+;;
+;; the stack lives in the top half of the zero page, and grows downward,
+;; indexed by the x register (so $80+x indicates the next free byte).
+;; $80 and $81 hold the 16-bit value that is either going on to or coming
+;; off the stack.
+;;
+;; since $80,x gives us the next available stack slot, $81,x is the item
+;; on the top of the stack
+;;
+;; We push the big end first, so that the data is on the stack in little-
+;; endian format, which means we can do indirect addressing directly
+;; through objects on the stack.
 
-;; Rather like the hadware stack, this stack lives on a dedicated page, and grows
-;; downwards. Unlike the regular stack, this one is a 16-bit stack, used for
-;; operands and parameters.
+stackaccess = $0080
+stackbase   = $0080
 
-;; stackpage specifies which page we use; stackptr keeps track of the next location,
-;; so the next byte will be recorded at stackpage+stackptr
 
-;; We put things on little-endian, in the usual manner.
-
-stackaccess = $00FO
-stackpage   = $0200
-stackptr    = $FF
+initstack
+  ldx #$FF
 
 push
-  phx                        ; we use x as index, so stash it
-  ldx stackptr               
-  lda stackaccess            ; first byte
-  sta stackpage,x
+  lda stackaccess+1          ; first byte (big end)
+  sta stackbase,x
   dex
-  lda stackaccess+1          ; second byte
-  sta stackpage,x
+  lda stackaccess            ; second byte (little end)
+  sta stackbase,x
   dex
-  stx stackptr               ; update stack pointer
-  plx                        ; restore x
   rts
 
 pop
-  phx                         ; stash x for safekeeping
-  ldx stackptr                ; use x as temporary stack pointer
-  dex                         ; stackptr signals next AVALABLE space so dec first
-  lda stackpage,x             ; retrieve first byte (second of the two that were stored)
-  sta stackaccess+1
-  dex
-  lda stackpage,x             ; retrieve second byte
+  lda stackbase+1,x          ; the little end
   sta stackaccess
-  stx stackptr                ; update the stack pointer
-  plx                         ; restore x
+  inx
+  lda stackbase+1,x          ; retrieve second byte
+  sta stackaccess+1
+  inx
   rts
 
 dup
-  phx
-  ldx stackptr
-  lda stackpage,x
-  sta stackpage-2,x
-  lda stackpage+1,x
-  sta stackpage-1,x            ; stackpage-1, ie, stackpage-2 + 1
+  lda stackbase+2,x          ; copy big end byte to next available slot
+  sta stackbase,x
   dex
+  lda stackbase+2,x          ; do again for little end
+  sta stackbase,x
   dex
-  stx stackptr
-  plx
   rts
 
 swap
-
+  // first, do a dup
+  lda stackbase+2,x          ; copy big end byte to next available slot
+  sta stackbase,x
+  dex
+  lda stackbase+2,x          ; do again for little end
+  sta stackbase,x
+  dex
+  // stack has now grown by one
+  // now copy item from slot 3 to slot 2
+  // low end byte is already in accumulator
+  lda stackbase+5,x
+  sta stackbase+3,x
+  lda stackbase+6,x
+  sta stackbase+4,x
+  // now copy top-of-stack item into slot 3
+  lda stackbase+1,x
+  sta stackbase+5,x
+  lda stackbase+2,x
+  sta stackbase+6,x
+  // discard temporary value on the top of the stack
+  dex
+  dex
+  rts
+  

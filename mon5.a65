@@ -17,6 +17,10 @@
 #include "decl.a65"
 #include "init.a65"
 
+jmp main
+
+#include "stack.a65"
+
 ;;;;;;;;;;;;;;;;;
 ;;;
 ;;; Storage areas. A line of entered text is stored in INPUT. ARGINDEX
@@ -88,12 +92,20 @@ wait_rxd_full
   beq wait_rxd_full
 .)
   lda ACIA_DATA
+  cmp #$08           ; check for backspace
+  beq backspace
   cmp #$0D           ; check for newline
   beq done
   sta INPUT,x        ; track the input
   inx
   jsr puta           ; echo the typed character
   jmp read           ; loop to repeat
+backspace
+  cpx #0             ; beginning of line?
+  beq read
+  dex                ; if not, go back one character
+  jsr puta           ; does this work?
+  jmp read
 
 done
   ;; this is where we land if the line input has finished
