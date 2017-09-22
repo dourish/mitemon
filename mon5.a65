@@ -941,7 +941,7 @@ twoparam              ; only two parameters specified, so fill in third
   stz stackaccess+1
   jsr push16
   bra finishparam
-threeparam            ; grab both parameters and stack them
+threeparam            ; grab both parameters and push them
   clc
   lda #<INPUT
   adc ARGINDEX+3
@@ -960,17 +960,17 @@ finishparam           ; process the (first) address parameter
   jsr push16
   jsr read16hex
 
-  ;; preserve x, since it's our stack pointer
-  phx
-
   ;; now we actually do the work
-  ;; first version -- just do 16 bytes
-  ;; base address is at (stackbase+1),x
-  ;; stash that at SCRATCH
+  ;; stash base address at SCRATCH
   lda stackbase+1,x
   sta SCRATCH
   lda stackbase+2,x
   sta SCRATCH+1
+
+nextline
+  ;; preserve x, since it's our stack pointer
+  phx
+
   ldy #0
 
   ;; print one line
@@ -1043,9 +1043,32 @@ wait_txd_empty
   sta ACIA_DATA
   inx
   jmp next_char
+
 end
   jsr crlf
+
   plx      ; restore x
+  clc
+
+  ;; subtract 16 from the count
+  lda stackbase+3,x
+  sbc #$10
+  ;; don't bother with the second byte, since it's always a single byte
+  sta stackbase+3,x
+  bcc donedump
+  beq donedump
+
+  ;; going round again, so add 16 to the base address
+  clc
+  lda SCRATCH
+  adc #$10
+  sta SCRATCH
+  lda SCRATCH+1
+  adc #0
+  sta SCRATCH+1
+  jmp nextline
+
+donedump
   ;; throw away last two items on the stack
   inx
   inx
