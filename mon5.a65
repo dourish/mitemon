@@ -231,8 +231,8 @@ table3
   .word echocmd
 table4
   .word table5
-  .byte "poke", $00
-  .word pokecmd
+  .byte "oldpoke", $00
+  .word oldpokecmd
 table5
   .word table6
   .byte "go", $00
@@ -242,9 +242,13 @@ table6
   .byte "test", $00
   .word testcmd
 table7
+  .word table8
+  .byte "poke", $00
+  .word pokecmd
+table8
   .word $0000            ; this signals it's the last entry in the table
-  .byte "pk2", $00
-  .word poke2cmd
+  .byte "newdump", $00
+  .word newdumpcmd
 
 
 .byte "PAUL3"
@@ -436,7 +440,7 @@ dumpcmd
 .(
   phx        ; preserve x, since it's our private stack pointer
   ;; first, set the default number of bytes to output
-  lda #16
+  lda #$0F
   sta SCRATCH+4
 
   ;; next, check arguments
@@ -674,7 +678,7 @@ end
 .)
 
 
-pokecmd
+oldpokecmd
 .(
   ;; check arguments
   lda ARGINDEX
@@ -874,7 +878,7 @@ end
   rts
 .)
 
-poke2cmd
+pokecmd
 .(
   ;; check arguments
   lda ARGINDEX
@@ -896,10 +900,14 @@ poke2cmd
   sta stackaccess+1
   jsr push16
   jsr read16hex
+
+  jsr pop16
+  lda stackbase+1,x
+  sta (stackaccess)
+  jsr putax
+  jsr pop16
   bra end
 
-  ;; doesn't actually do anything yet... just testing, check the stack
-  ;;
 error
   ldx #0
   ;; do error
@@ -915,6 +923,134 @@ wait_txd_empty
   jmp next_char
 end
   jsr crlf
+  rts
+.)
+
+newdumpcmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #2
+  beq twoparam        ; not three, so there's an error of some sort
+  cmp #3
+  beq threeparam
+  jmp error
+twoparam              ; only two parameters specified, so fill in third
+  lda #$10            ; default number of bytes to dump
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  bra finishparam
+threeparam            ; grab both parameters and stack them
+  clc
+  lda #<INPUT
+  adc ARGINDEX+3
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read8hex
+finishparam           ; process the (first) address parameter
+  clc
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read16hex
+
+  ;; preserve x, since it's our stack pointer
+  phx
+
+  ;; now we actually do the work
+  ;; first version -- just do 16 bytes
+  ;; base address is at (stackbase+1),x
+  ;; stash that at SCRATCH
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+  ldy #0
+
+  ;; print one line
+
+  ;; print the address
+  lda SCRATCH+1
+  jsr putax
+  lda SCRATCH
+  jsr putax
+
+  ;; print separator
+  lda #$3a         ; colon
+  jsr puta
+  lda #$20         ; space
+  jsr puta
+
+  ;; print first eight bytes
+printbyte
+  lda (SCRATCH),y
+  jsr putax
+  lda #$20
+  jsr puta
+  cpy #$08          ; if at 8, print extra separator
+  bne nextbyte
+  jsr puta
+nextbyte            ; inc and move on to next byte
+  iny
+  cpy #$10          ; stop when we get to 16
+  bne printbyte
+  
+  ;; print separator
+  lda #$20
+  jsr puta
+  jsr puta
+  lda #$7C          ; vertical bar
+  jsr puta          ; faster to have that as a little character string!
+
+  ;; print ascii values for 16 bytes
+  ldy #0
+nextascii
+  cpy #$10
+  beq endascii
+  lda (SCRATCH),y
+  ;; it's printable if it's over 32 and under 127
+  cmp #32
+  bmi unprintable
+  cmp #127
+  bmi printascii
+unprintable
+  lda #$2e          ; dot
+printascii
+  jsr puta
+  iny
+  bra nextascii
+endascii
+  lda #$7C          ; vertical bar
+  jsr puta          ; faster to have that as a little character string!
+  bra end
+  
+error
+  ldx #0
+  ;; do error
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda dumperrstring,x
+  beq end
+  sta ACIA_DATA
+  inx
+  jmp next_char
+end
+  jsr crlf
+  plx      ; restore x
+  ;; throw away last two items on the stack
+  inx
+  inx
+  inx
+  inx
   rts
 .)
 
@@ -1199,6 +1335,7 @@ wait_txd_empty
 ;;;
 putax
 .(
+  phy
   pha
 wait_txd_empty
   lda ACIA_STATUS
@@ -1226,6 +1363,7 @@ wait_txd_empty2
   lda hextable,y
   sta ACIA_DATA
 .)
+  ply
   rts
 
 ;;;
