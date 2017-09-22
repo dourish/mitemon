@@ -17,13 +17,13 @@
 ;; through objects on the stack.
 
 stackaccess = $0080
-stackbase   = $0080
+stackbase   = $0000
 
 
 initstack
   ldx #$FF
 
-push
+push16
   lda stackaccess+1          ; first byte (big end)
   sta stackbase,x
   dex
@@ -32,7 +32,7 @@ push
   dex
   rts
 
-pop
+pop16
   lda stackbase+1,x          ; the little end
   sta stackaccess
   inx
@@ -41,7 +41,7 @@ pop
   inx
   rts
 
-dup
+dup16
   lda stackbase+2,x          ; copy big end byte to next available slot
   sta stackbase,x
   dex
@@ -50,7 +50,7 @@ dup
   dex
   rts
 
-swap
+swap16
   // first, do a dup
   lda stackbase+2,x          ; copy big end byte to next available slot
   sta stackbase,x
@@ -71,7 +71,206 @@ swap
   lda stackbase+2,x
   sta stackbase+6,x
   // discard temporary value on the top of the stack
-  dex
-  dex
+  inx
+  inx
   rts
-  
+
+add16
+  clc                        ; clear carry
+  lda stackbase+1,x          ; add the lower byte
+  adc stackbase+3,x
+  sta stackbase+3,x          ; put it back in the second slot
+  lda stackbase+2,x          ; then the upper byte
+  adc stackbase+4,x
+  sta stackbase+4,x          ; again, back in the second slot
+  inx                        ; shink the stack so that sum is now
+  inx                        ; in the top slot
+  rts
+
+
+;; at the address denoted by the top of the stack, read a two-character
+;; string and interpret it as a hex byte, decode, and leave the result
+;; on the stack.
+;; BUG fails if string crosses page boundary
+;;
+read8hex
+  jsr pop16                ; address into stackaccess (and off stack)
+  lda (stackaccess)        ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  bra next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  bra next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  asl
+  asl
+  asl
+  asl
+  sta SCRATCH+4          ; assembling result here
+.)
+  inc stackaccess        ; BUG won't work if string crosses a page boundary
+  lda (stackaccess)      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  jmp next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  clc
+  adc SCRATCH+4
+  sta SCRATCH+4
+.)
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  rts
+
+
+;; at the address denoted by the top of the stack, read a four-character
+;; string and interpret it as a 16-bit word, decode, and leave the result
+;; on the stack.
+;; BUG fails if string crosses page boundary
+;;
+read16hex
+  ;;
+  ;; here's the logic:
+  ;; if char code < 0x40 then subtractand is 0x30
+  ;; else if char code < 0x60 then subtractand is 0x37
+  ;; else subtractand is 0x57
+  ;;
+
+  jsr pop16                ; address into stackaccess (and off stack)
+  lda (stackaccess)        ; first nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  bra next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  bra next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  asl
+  asl
+  asl
+  asl
+  sta SCRATCH+3          ; assembling result here
+.)
+  inc stackaccess    ; BUG won't work if string crosses page boundary
+  lda (stackaccess)      ; second nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  bra next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  bra next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  clc
+  adc SCRATCH+3
+  sta SCRATCH+3
+.)
+  inc stackaccess        ; BUG see above
+  lda (stackaccess)      ; third nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  bra next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  bra next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  asl
+  asl
+  asl
+  asl
+  sta SCRATCH+2          ; assembling result here (little-endian, so earlier)
+.)
+  inc stackaccess  ; BUG see above
+  lda (stackaccess)      ; fourth nybble
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  bra next
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  bra next
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+next
+  clc
+  adc SCRATCH+2
+  sta SCRATCH+2
+.)
+  sta stackaccess
+  lda SCRATCH+3
+  sta stackaccess+1
+  jsr push16
+  rts
