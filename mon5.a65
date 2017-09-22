@@ -122,7 +122,6 @@ done
 
 
 
-.byte "PAUL1"        ; I use this to find entry points in the memory view
 
 parsecmd
   phx                ; preserve x, since it's our private stack pointer
@@ -166,7 +165,6 @@ endofline
   rts
 .)
 
-.byte "PAUL2"
 
 ;;;
 ;;; just for testing. echo arguments, backwards.
@@ -231,27 +229,17 @@ table3
   .word echocmd
 table4
   .word table5
-  .byte "oldpoke", $00
-  .word oldpokecmd
+  .byte "poke", $00
+  .word pokecmd
 table5
   .word table6
   .byte "go", $00
   .word gocmd
 table6
-  .word table7
+  .word $0000            ; this signals it's the last entry in the table
   .byte "test", $00
   .word testcmd
-table7
-  .word table8
-  .byte "poke", $00
-  .word pokecmd
-table8
-  .word $0000            ; this signals it's the last entry in the table
-  .byte "newdump", $00
-  .word newdumpcmd
 
-
-.byte "PAUL3"
 
 matchcommand
   lda #<table    ; low byte of table address
@@ -426,457 +414,6 @@ end
 .)
 
 
-.byte "PAUL4"
-
-;;;;;;;;;;;;
-;;;
-;;; We are doing this a dumb way. Don't bother generating and storing
-;;; the subtractand; just go ahead and do the job right away. save
-;;; space AND cycles
-;;;
-;;;;;;;;;;;;
-
-dumpcmd
-.(
-  phx        ; preserve x, since it's our private stack pointer
-  ;; first, set the default number of bytes to output
-  lda #$0F
-  sta SCRATCH+4
-
-  ;; next, check arguments
-  lda ARGINDEX
-  cmp #2        ; only one parameter, so jump straight to decoding it
-  beq decode
-  cmp #3
-  beq arg2      ; two parameters so we decode the second first
-  jmp error     ; not two, not three, so there's an error of some sort
-arg2
-argdecode
-  ldx ARGINDEX+3
-  lda INPUT,x      ; first nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty SCRATCH+14
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty SCRATCH+14
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty SCRATCH+14
-start  
-  sec
-  sbc SCRATCH+14
-  asl
-  asl
-  asl
-  asl
-  sta SCRATCH+4          ; assembling result here
-.)
-  inx
-  lda INPUT,x      ; second nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty SCRATCH+14
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty SCRATCH+14
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty SCRATCH+14
-start  
-  sec
-  sbc SCRATCH+14
-  clc
-  adc SCRATCH+4
-  sta SCRATCH+4
-.)
-
-  ;; done with second parameter
-  ;; turn first parameter into an address
-  ;;
-  ;; here's the logic:
-  ;; if char code < 0x40 then subtractand is 0x30
-  ;; else if char code < 0x60 then subtractand is 0x37
-  ;; else subtractand is 0x57
-  ;; leave two-byte result in SCRATCH+2 and SCRATCH+3
-  ;;
-decode
-  ldx ARGINDEX+2
-  lda INPUT,x      ; first nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty SCRATCH+14
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty SCRATCH+14
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty SCRATCH+14
-start  
-  sec
-  sbc SCRATCH+14
-  asl
-  asl
-  asl
-  asl
-  sta SCRATCH+3          ; assembling result here
-.)
-  inx
-  lda INPUT,x      ; second nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty SCRATCH+14
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty SCRATCH+14
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty SCRATCH+14
-start  
-  sec
-  sbc SCRATCH+14
-  clc
-  adc SCRATCH+3
-  sta SCRATCH+3
-.)
-  inx
-  lda INPUT,x      ; third nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty SCRATCH+14
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty SCRATCH+14
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty SCRATCH+14
-start  
-  sec
-  sbc SCRATCH+14
-  asl
-  asl
-  asl
-  asl
-  sta SCRATCH+2          ; assembling result here (little-endian, so earlier)
-.)
-  inx
-  lda INPUT,x      ; fourth nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty SCRATCH+14
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty SCRATCH+14
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty SCRATCH+14
-start  
-  sec
-  sbc SCRATCH+14
-  clc
-  adc SCRATCH+2
-  sta SCRATCH+2
-.)
-  ;; output address
-  lda SCRATCH+3
-  jsr putax
-  lda SCRATCH+2
-  jsr putax
-  ;; output colon
-  lda #$3a         ; colon
-  jsr puta
-
-  ;; output each byte
-  ldx #0
-nextbyte
-  cpx SCRATCH+4
-  beq end
-  ;; output a space
-  lda #32
-  jsr puta
-  ;; output the byte
-  stx SCRATCH+15
-  ldy SCRATCH+15
-  lda (SCRATCH+2),y
-  jsr putax
-  ;; next
-  inx
-  bne nextbyte      ; essentially branch always
-  ;; crlf
-  jmp end
-error
-  ldx #0
-  ;; do error
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda dumperrstring,x
-  beq end
-  sta ACIA_DATA
-  inx
-  jmp next_char
-end
-  jsr crlf
-  plx   ; restore x, since it's our stack pointer
-  rts
-.)
-
-
-oldpokecmd
-.(
-  ;; check arguments
-  lda ARGINDEX
-  cmp #3
-  beq argdecode
-  jmp error        ; not three, so there's an error of some sort
-argdecode
-  ldx ARGINDEX+3
-  lda INPUT,x      ; first nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; lower case character, so substract $57
-  sec
-  sbc #$57
-  jmp next
-upper
-  cmp #$40
-  bcc number
-  ;; upper case character, so substract $37
-  sec
-  sbc #$037
-  jmp next
-number
-  ;; numeric character, so subtract $30
-  sec
-  sbc #$30
-next
-  asl
-  asl
-  asl
-  asl
-  sta SCRATCH+4          ; assembling result here
-.)
-  inx
-  lda INPUT,x      ; second nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; lower case character, so substract $57
-  sec
-  sbc #$57
-  jmp next
-upper
-  cmp #$40
-  bcc number
-  ;; upper case character, so substract $37
-  sec
-  sbc #$037
-  jmp next
-number
-  ;; numeric character, so subtract $30
-  sec
-  sbc #$30
-next
-  clc
-  adc SCRATCH+4
-  sta SCRATCH+4
-.)
-
-  ;; done with second parameter
-  ;; turn first parameter into an address
-  ;;
-  ;; here's the logic:
-  ;; if char code < 0x40 then subtractand is 0x30
-  ;; else if char code < 0x60 then subtractand is 0x37
-  ;; else subtractand is 0x57
-  ;;
-decode
-  ldx ARGINDEX+2
-  lda INPUT,x      ; first nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; lower case character, so substract $57
-  sec
-  sbc #$57
-  jmp next
-upper
-  cmp #$40
-  bcc number
-  ;; upper case character, so substract $37
-  sec
-  sbc #$037
-  jmp next
-number
-  ;; numeric character, so subtract $30
-  sec
-  sbc #$30
-next
-  asl
-  asl
-  asl
-  asl
-  sta SCRATCH+3          ; assembling result here
-.)
-  inx
-  lda INPUT,x      ; second nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; lower case character, so substract $57
-  sec
-  sbc #$57
-  jmp next
-upper
-  cmp #$40
-  bcc number
-  ;; upper case character, so substract $37
-  sec
-  sbc #$037
-  jmp next
-number
-  ;; numeric character, so subtract $30
-  sec
-  sbc #$30
-next
-  clc
-  adc SCRATCH+3
-  sta SCRATCH+3
-.)
-  inx
-  lda INPUT,x      ; third nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; lower case character, so substract $57
-  sec
-  sbc #$57
-  jmp next
-upper
-  cmp #$40
-  bcc number
-  ;; upper case character, so substract $37
-  sec
-  sbc #$037
-  jmp next
-number
-  ;; numeric character, so subtract $30
-  sec
-  sbc #$30
-next
-  asl
-  asl
-  asl
-  asl
-  sta SCRATCH+2          ; assembling result here (little-endian, so earlier)
-.)
-  inx
-  lda INPUT,x      ; fourth nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; lower case character, so substract $57
-  sec
-  sbc #$57
-  jmp next
-upper
-  cmp #$40
-  bcc number
-  ;; upper case character, so substract $37
-  sec
-  sbc #$037
-  jmp next
-number
-  ;; numeric character, so subtract $30
-  sec
-  sbc #$30
-next
-  clc
-  adc SCRATCH+2
-  sta SCRATCH+2
-.)
-  ;; after all that, now finally do the poke
-  lda SCRATCH+4
-  ldx #0
-  sta (SCRATCH+2,X)
-  jsr putax
-  jsr crlf
-  rts
-
-error
-  ldx #0
-  ;; do error
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda pokeerrstring,x
-  beq end
-  sta ACIA_DATA
-  inx
-  jmp next_char
-end
-  jsr crlf
-  rts
-.)
 
 pokecmd
 .(
@@ -926,15 +463,15 @@ end
   rts
 .)
 
-newdumpcmd
+dumpcmd
 .(
   ;; check arguments
   lda ARGINDEX
   cmp #2
-  beq twoparam        ; not three, so there's an error of some sort
+  beq twoparam        ; two parameters (ie instruction plus address)
   cmp #3
-  beq threeparam
-  jmp error
+  beq threeparam      ; three parameters (instruction, address, count)
+  jmp error           ; neither 2 nor 3, so there's an error
 twoparam              ; only two parameters specified, so fill in third
   lda #$10            ; default number of bytes to dump
   sta stackaccess
@@ -1078,233 +615,55 @@ donedump
 .)
 
 
-
+;;; NEW go command, using stack-based parameter processing
+;;;
 gocmd
 .(
+  ;; check arguments
   lda ARGINDEX
   cmp #2
-  beq decode
+  beq processparam
   jmp error
 
-  ;; just grabbed this code from above for parsing a hexaddress
-decode
-  ldx ARGINDEX+2
-  lda INPUT,x      ; first nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
-  sec
-  sbc $00AE
-  asl
-  asl
-  asl
-  asl
-  sta SCRATCH+3          ; assembling result here
-.)
-  inx
-  lda INPUT,x      ; second nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
-  sec
-  sbc $00AE
+processparam           ; process the (first) address parameter
   clc
-  adc SCRATCH+3
-  sta SCRATCH+3
-.)
-  inx
-  lda INPUT,x      ; third nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
-  sec
-  sbc $00AE
-  asl
-  asl
-  asl
-  asl
-  sta SCRATCH+2          ; assembling result here (little-endian, so earlier)
-.)
-  inx
-  lda INPUT,x      ; fourth nybble
-.(
-  cmp #$60
-  bcc upper
-  ;; we're lower case
-  ldy #$057
-  sty $00AE
-  jmp start
-upper
-  cmp #$40
-  bcc number
-  ;; we're upper case
-  ldy #$037
-  sty $00AE
-  jmp start
-number
-  ;; we're a number
-  ldy #$30
-  sty $00AE
-start  
-  sec
-  sbc $00AE
-  clc
-  adc SCRATCH+2
-  sta SCRATCH+2
-.)
-  lda SCRATCH+2
-  sta INDJSRVEC
-  lda SCRATCH+3
-  sta INDJSRVEC+1
-  jsr indjsr
-  jmp end
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read16hex
+
+  jsr pop16            ; put the address into stackaccess
+  jmp (stackaccess)    ; jump directly
+  ;; no rts here because we'll rts from the subroutine
+
 error
-  ldx #0
+  ldy #0
   ;; do error
 next_char
 wait_txd_empty  
   lda ACIA_STATUS
   and #$10
   beq wait_txd_empty
-  lda goerrstring,x
-  beq enderr
+  lda goerrstring,y
+  beq end
   sta ACIA_DATA
-  inx
+  iny
   jmp next_char
-enderr
-  jsr crlf
+
 end
+  jsr crlf
   rts
 .)
 
-
 testcmd
   ;; some testing for the stack routines
-  ;; push $1234
-  lda #$34
-  sta stackaccess
-  lda #$12
-  sta stackaccess+1
-  jsr push16
-  ;; push $5678
-  lda #$78
-  sta stackaccess
-  lda #$56
-  sta stackaccess+1
-  jsr push16
-  ;; push $1111
-  lda #$11
-  sta stackaccess
-  sta stackaccess+1
-  jsr push16
-  ;; push $2222
-  lda #$22
-  sta stackaccess
-  sta stackaccess+1
-  jsr push16
-  ;; add 'em
-  jsr add16
-  jsr swap16
-  jsr pop16
-  lda #<testnum1
-  sta stackaccess
-  lda #>testnum1
-  sta stackaccess+1
-  jsr push16
-  jsr read8hex
-  lda #<testnum2
-  sta stackaccess
-  lda #>testnum2
-  sta stackaccess+1
-  jsr push16
-  jsr read8hex
-  lda #<testnum3
-  sta stackaccess
-  lda #>testnum3
-  sta stackaccess+1
-  jsr push16
-  jsr read8hex
-  lda #<testnum4
-  sta stackaccess
-  lda #>testnum4
-  sta stackaccess+1
-  jsr push16
-  jsr read8hex
-  lda #<testnum5
-  sta stackaccess
-  lda #>testnum5
-  sta stackaccess+1
-  jsr push16
-  jsr read8hex
-  lda #<testnum6
-  sta stackaccess
-  lda #>testnum6
-  sta stackaccess+1
-  jsr push16
-  jsr read16hex
-  lda #<testnum7
-  sta stackaccess
-  lda #>testnum7
-  sta stackaccess+1
-  jsr push16
-  jsr read16hex
+  ;; not needed any more
   rts
 
-testnum1: .byte "10", $00
-testnum2: .byte "11", $00
-testnum3: .byte "1c", $00
-testnum4: .byte "1C", $00
-testnum5: .byte "FF", $00
-testnum6  .byte "FEED", $00
-testnum7  .byte "1234", $00
+
 
 ;;;;;;;;;;;;;
 ;;;
@@ -1403,12 +762,12 @@ indjsr
 ;;;
 
 hextable:	 .byte "0123456789ABCDEF"
-greeting:	 .byte "6502 Mite monitor v05. Hi Paul.", $0d, $0a, $00
+greeting:	 .byte "6502 Mite SBC simple mmonitor v05. Hi Paul.", $0d, $0a, $00
 prompt:		 .byte "*"
 helpstring:	 .byte "Commands available: echo, help, about, dump, poke, go", $0d, $0a, $00
 errorstring:	 .byte "Command not recognized", $0d, $0a, $00
 implementstring: .byte "Not yet implemented", $0d, $0a, $00
-dumperrstring:   .byte "Usage: dump hexaddress [count:0f]", $00
+dumperrstring:   .byte "Usage: dump hexaddress [count:10]", $00
 pokeerrstring:   .byte "Usage: poke hexaddress hexvalue", $00
 goerrstring:	 .byte "Usage: go hexaddress", $00
 char:		 .byte "."
