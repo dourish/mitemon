@@ -765,7 +765,7 @@ indjsr
 ;;;
 
 hextable:	 .byte "0123456789ABCDEF"
-greeting:	 .byte "6502 Mite SBC simple mmonitor v05. Hi Paul.", $0d, $0a, $00
+greeting:	 .byte "6502 Mite SBC simple mmonitor v06. Hi Paul.", $0d, $0a, $00
 prompt:		 .byte "*"
 helpstring:	 .byte "Commands available: echo, help, about, dump, poke, go", $0d, $0a, $00
 errorstring:	 .byte "Command not recognized", $0d, $0a, $00

@@ -1,25 +1,60 @@
 
 
 ;; simple xmodem implementation (receive only)
+;; super simplistic. so far, this (1) doesn't implement any timeouts, and
+;; (2) bascially presumes that everything goes great or all it all just
+;; konks out.
 ;;
-
 
 XBLOCKNO = $0030
 XBLOCKINV =  $0031
 XBLOCKCOUNT = $0032
 XCHKSUM = $0033
-;;XDEST = $0034 ; and $0035
-XDEST = $0400
+XDESTADDR = $0034 ; and $0035
+BUFFER=$0036 ; and $0037
 
-;; for the moment, let's presume that the data is at
-;; XBUFFER
 
 xmodemrecv
+  ;; print a message announcing that we're listening
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda startstr,y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+  jsr crlf
+.)
+
+  phx               ; preserve operand stack pointer
+
+  ; load up the destination location. for the moment, that's just
+  ; a test block in memory ($0400)
+  stz XDESTADDR
+  lda #$04
+  sta XDESTADDR+1
+
+  ; load up the buffer location. this is purely during test -- don't need
+  ; it after
+  LDA #<XBUFFER
+  STA BUFFER
+  LDA #>XBUFFER
+  STA BUFFER+1
+
   stz XBLOCKCOUNT
   ldy #$0
+  ldx #0
 
 nextblock
   ;; anything?
+  jmp processbuffer
+  .byte "PAUL"
 
 ;; check header data and block number
 processbuffer
@@ -28,6 +63,7 @@ processbuffer
   beq endoftransmission
   cmp #$01          ; start-of-header?
   beq processblock
+  jsr headererror
   jmp error
 
 processblock
@@ -41,39 +77,69 @@ processblock
   sbc XBLOCKNO
   cmp XBLOCKINV     ; does block number match inverse block number?
   beq checkblockcount
+  jsr blockcounterror
   jmp error
 
 checkblockcount
   inc XBLOCKCOUNT
+  lda XBLOCKCOUNT
   cmp XBLOCKNO      ; does it match what we were expecting?
   beq processdata
+  jsr blockcounterror
   jmp error
 
 processdata
-nextbyte
   stz XCHKSUM
+  ldy #0
+nextbyte
   jsr geta
-  sta XDEST,x
+  sta (XDESTADDR),y
   clc
   adc XCHKSUM
-  inx
-  cpx #$80
+  sta XCHKSUM
+  iny
+  cpy #$80
   bne nextbyte
 endofblock
   jsr geta
   cmp XCHKSUM
   beq checksumok
+  jsr putax
+  lda XCHKSUM
+  jsr putax
+  jsr checksumerror
   jmp error
 checksumok
+  ;; update the destination address by 128 ($80)
+  lda #$80
+  clc
+  adc XDESTADDR
+  sta XDESTADDR
+  lda XDESTADDR+1
+  adc #0
+  sta XDESTADDR+1
   bra nextblock
 
 ;; what do i do at this point? just say "OK"?
 endoftransmission
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda recvdstr,y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
   jsr crlf
+.)
   jmp endxmodem
 
 error
-  ;; say something bad
 
 endxmodem
   plx               ; restore operand stack pointer in x
@@ -82,8 +148,16 @@ endxmodem
 ;; when this runs for real, geta will get a character from the IO
 ;; but for now, it's going to read out of a predefined buffer
 geta
-  lda XBUFFER,y
-  iny
+  lda (BUFFER)
+  pha
+  lda BUFFER
+  clc
+  adc #1
+  sta BUFFER
+  lda BUFFER+1
+  adc #0
+  sta BUFFER+1
+  pla
   rts
 
 
@@ -141,7 +215,6 @@ XBUFFER
 .byte $f1,
 
 .byte $01, $05, $FA,
-.byte $69,  $6e,  $76,  $20,  $62,  $6c,  $6f,  $63, $6b,  $0a
 .byte $6d,  $65,  $20,  $72,  $65,  $71,  $75,  $69,  $72,  $65,  $73,  $21,  $22,  $0a
 .byte $57,  $69,  $74,  $68,  $20,  $74,  $68,  $61,  $74,  $2c,  $20,  $74,  $68,  $65,  $20,  $77
 .byte $72,  $65,  $74,  $63,  $68,  $65,  $64,  $20,  $63,  $68,  $69,  $6c,  $64,  $20,  $65,  $78
@@ -151,6 +224,67 @@ XBUFFER
 .byte $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58
 .byte $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58,  $58
 .byte $58,  $0a
-.byte $15,
+.byte $15
 
 .byte $04
+
+checksumerror
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda chksmerrstr,y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+  jsr crlf
+.)
+  rts
+
+headererror
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda headerrstr,y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+  jsr crlf
+.)
+  rts
+
+blockcounterror
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda blockerrstr,y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+  jsr crlf
+.)
+  rts
+
+
+startstr:   .byte "xmodem listening", $00
+recvdstr:   .byte "xmodem received", $00
+blockerrstr:.byte "block count error", $00
+chksmerrstr:.byte "checksum errror", $00
+headerrstr: .byte "header error", $00
