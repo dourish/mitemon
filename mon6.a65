@@ -96,9 +96,13 @@ table5
   .byte "go", $00
   .word gocmd
 table6
-  .word $0000            ; this signals it's the last entry in the table
+  .word table7
   .byte "test", $00
   .word testcmd
+table7
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "memtest", $00
+  .word memtestcmd
 
 
 ;; More utility routines
@@ -764,6 +768,7 @@ wait_txd_empty
 putax
 .(
   phy
+
   pha
 wait_txd_empty
   lda ACIA_STATUS
@@ -796,33 +801,44 @@ wait_txd_empty2
 
 
 ;; memory test
+;; the process is, for each page of memory (and MEMTESTBASE points
+;; to the starting point), we write the number of that page into
+;; each byte of that page (ie, each byte on page $1200 gets written
+;; with $12, each byte on page $4600 gets written with $46).
+;; then we read back and report errors. Leave the memory as it
+;; is at the end of the test so that I can poke around with the
+;; monitor later
 ;;
-memtest
-
+memtestcmd
+  ;; stage one is the right
 writetest
   stz MEMTESTBASE
-  lda #$05
+  lda #$05         ;; we start at page $05
   sta MEMTESTBASE+1
 
   ;; for page x, write x into each byte
 .(
-nextpage
+fillpage
   ldy #$00
-  lda MEMTESTBASE+1
+  lda MEMTESTBASE+1 ; load bit pattern
 loop
   sta (MEMTESTBASE),y
   iny
   bne loop
 
+  ;; move onto the next page, as long as we're still in the RAM
+nextpage
   ;lda BASE+1
-  inc
+  inc               ; accumulator still holds page numner
   cmp #$80          ; stop when we hit the upper half of memory
   beq readtest
   sta MEMTESTBASE+1
-  bra nextpage
+  bra fillpage
 .)
 
+  ;; stage two. read it back and check.
 readtest
+  ;; start at the beginning again
   stz MEMTESTBASE
   lda #$05
   sta MEMTESTBASE+1
@@ -837,11 +853,18 @@ loop
   bne testerr
   iny
   bne loop
-  inc MEMTESTBASE+1
+
+  lda MEMTESTBASE+1
+  inc
   cmp #$80
   beq exit
+  sta MEMTESTBASE+1
   bra nextpage
 testerr
+  lda MEMTESTBASE+1
+  jsr putax
+  tya
+  jsr putax
   jsr memtesterr
 exit
   plx
