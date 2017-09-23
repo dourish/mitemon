@@ -124,6 +124,7 @@ init_acia
   lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
   sta ACIA_CONTROL
 
+  jsr clearmem
   jsr initstack
 
 ;; done with initialization. start actually being a monitor
@@ -968,6 +969,22 @@ endstr
   rts
 
 
+clearmem
+  stz $00
+  stz $01
+  ldx #0
+nextpage
+  ldy #0
+  lda #0
+clearloop
+  sta ($00),y
+  iny
+  bne clearloop
+  inx
+  sta $01
+  cpx #$80
+  bne nextpage
+  rts
 
 
 
