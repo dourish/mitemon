@@ -100,9 +100,13 @@ table6
   .byte "test", $00
   .word testcmd
 table7
-  .word $0000            ; this signals it's the last entry in the table
+  .word table8
   .byte "memtest", $00
   .word memtestcmd
+table8
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "romram", $00
+  .word romramcmd
 
 
 ;; More utility routines
@@ -119,6 +123,8 @@ init_acia
   sta ACIA_COMMAND
   lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
   sta ACIA_CONTROL
+
+  jsr initstack
 
 ;; done with initialization. start actually being a monitor
 ;;
@@ -254,33 +260,35 @@ endofline
 ;;; just for testing. echo arguments, backwards.
 ;;;
 testparse
-  cpy #0               ; test for no arguments
+  phx               ; preserve x
+  cpy #0            ; test for no arguments
   beq donetestparse
-  iny                  ; add one to get a guard value
-  sty TMP1             ; store in TMP1. when we get to this value, we stop
-  ldy #1               ; start at 1
+  iny               ; add one to get a guard value
+  sty TMP1          ; store in TMP1. when we get to this value, we stop
+  ldy #1            ; start at 1
 nextarg
   clc
-  tya                   ; grab the argument number
-  adc #$30              ; add 48 to make it an ascii value
+  tya               ; grab the argument number
+  adc #$30          ; add 48 to make it an ascii value
   jsr puta
-  lda #$3A              ; ascii for ":"
+  lda #$3A          ; ascii for ":"
   jsr puta
-  ldx ARGINDEX,y        ; load the index of the next argument into x
+  ldx ARGINDEX,y    ; load the index of the next argument into x
 nextletter
   ;; print null-terminated string from INPUT+x
   lda INPUT,x
   beq donearg
   jsr puta
   inx
-  bne nextletter        ; use this as "branch always," will never be 0
+  bne nextletter    ; use this as "branch always," will never be 0
 donearg
   ;; output carriage return/line feed and see if there are more arguments
   jsr crlf
   iny
   cpy TMP1
-  bne nextarg           ; not hit guard yet, so repeat
+  bne nextarg       ; not hit guard yet, so repeat
 donetestparse
+  plx
   rts
 
 
@@ -810,7 +818,8 @@ wait_txd_empty2
 ;; monitor later
 ;;
 memtestcmd
-  ;; stage one is the right
+  phx               ; preserve the stack, we're going to need x...
+  ;; stage one is the write
 writetest
   stz MEMTESTBASE
   lda #$05         ;; we start at page $05
@@ -870,6 +879,66 @@ exit
   plx
   rts
 .)  
+
+
+;;; rom/ram test
+;;; REMOVE AFTER DEBUGGING
+;; takes a single block of code, which implement a busy-wait, and copies
+;; it from ROM into three different locations in RAM. then ties them
+;; together with JMPs, in sequence. the result should be that the upper
+;; address lines cycle slowly through 0001, 0010, 0100, and 1000, which
+;; i should be able to monitor with LEDs and will indicate that reading
+;; and writing to RAM are both working.
+;;
+;; NOTE this routine never returns. Safe to nuke X and Y, we'll have to
+;; reset to end it.
+
+romramcmd
+  JMP copycode
+
+// delay by counting down X and Y 256^2 times
+//
+delaycode
+  LDX #255
+outer
+  LDY #255
+inner
+  DEY
+  BNE inner
+  DEX
+  BNE outer
+  JMP $1000
+
+copycode        // copy "delaycode" code block from ROM into RAM
+  LDX #11
+copyloop:
+  LDA delaycode,X
+  STA $1000,X
+  STA $2000,X
+  STA $4000,X
+  DEX
+  BNE copyloop
+
+  LDA delaycode // zeroth instruction
+  STA $1000
+  STA $2000
+  STA $4000
+
+  LDA #$00      // store jump instructions addresses. low byte first...
+  STA $100B
+  STA $200B
+  LDA #<delaycode
+  STA $400B
+
+  LDA #$20      // ... then high bytes
+  STA $100C
+  LDA #$40
+  STA $200C
+  LDA #>delaycode
+  STA $400C
+
+  JMP delaycode // starts the whole thing going
+
 
 ;;;
 ;;; this is for doing indirect subroutine jumps. store the subroutine

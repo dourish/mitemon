@@ -22,6 +22,7 @@ stackbase   = $0000
 
 initstack
   ldx #$FF
+  rts
 
 push16
   lda stackaccess+1          ; first byte (big end)
@@ -273,4 +274,46 @@ next
   lda SCRATCH+3
   sta stackaccess+1
   jsr push16
+  rts
+
+
+print16hex
+  jsr pop16
+  lda stackaccess+1
+  jsr putax
+  lda stackaccess
+  jsr putax
+  rts
+
+print8hex
+  jsr pop16
+  lda stackaccess
+  jsr putax
+  rts
+
+print16dec
+  ;; to be implemented
+
+print8dec
+  ;; to be implemented
+
+printstr
+  jsr pop16
+  phy               ; preserve Y
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda (stackaccess),y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+  jsr crlf
+.)
+  ply
   rts
