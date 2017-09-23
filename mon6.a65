@@ -1,36 +1,55 @@
 ;;;
-;;; Initial tests of monitor code for the 6502 Mite micro.
+;;; MITEMON
+;;;
+;;; Very simple ROM monitor for the 6502 Mite single-board computer.
+;;; Just basically enough to poke around and make sure that things
+;;; are working.
+;;;
 ;;; v3 parses command line arguments
 ;;; v4 does basic command dispatch and some simple commands
 ;;; v5 rebuilding around a stack-based calling convention
-;;; v6 adding XMODEM to upload files
+;;; v6 adding XMODEM to upload files and a memory test
 ;;;
 ;;; Paul Dourish, March-October 2017
 ;;;
 
+;;; My ROM is actually 32K, but the lower half ($8000-$BFFF) is masked
+;;; by IO. So, everything starts at $C000.
+;;;
 * = $C000
 
 ;;;;;;;;;;;;;;;;;
 ;;;
-;;; Storage areas. A line of entered text is stored in INPUT. ARGINDEX
-;;; is used by the parser to record where each individual argument begins;
-;;; it is indexed by 1, and each value stores an offset into ARGINDEX
-;;; (ie. the first argument, which is almost always stored at INPUT[0],
-;;; is recorded as a zero value at ARGINDEX[1]. ARGINDEX[0] is count.
-;;; TMP1 is a scratch variable.
+;;; Zero page and other storage areas. Various parts of the zero page
+;;; are used for scratch and for key data.
+;;;
+;;; A line of entered text is stored in INPUT. ARGINDEX is used
+;;; by the parser to record where each individual argument begins.
+;;; ARGINDEX[0] is a count of the number of words on the command
+;;; line. ARGINDEX[1-n] are pointers into where, inside INDEX, each
+;;; word begins (ie, ARGINDEX[1] is the index inside INPUT where
+;;; the first argument string begins).
 ;;;
 ;;;;;;;;;;;;;;;;;;
 
-;; using $00AA-$00AF as scratchpad
-SCRATCH      = $0010
+;; these 16 address are basic scratch memory, for use only inside
+;; a few instructions... not guaranteed safe across a subroutine call,
+;; for instance.
+;;
+SCRATCH    = $0010  ; through to $001F
 
-ARGINDEX     = $0020
-TMP1         = $0021
-INDJSRVEC    = $0022   ; and $0023
-ENTRY	     = $0024   ; and $0025
+ARGINDEX   = $0020  ; and on to $002F for up to 16 arguments
 ;; block $0030-003F for xmodem variables
-INPUT        = $0200   ; block out this page for input
-;; block page $0300 for xmodem buffer
+TMP1       = $0040  ; couldn't I use SCRATCH for this?
+;; $0041 is free
+INDJSRVEC  = $0042  ; and $0043  ;; NOTE not used any more?
+ENTRY	   = $0044  ; and $0045
+MEMTESTBASE= $0046  ; and $0047
+;; $0080-00FF is my operand stack
+;; $0100-01FF is 6502 stack
+INPUT      = $0200  ; block out this page for monitor command input
+;; $0300-03FF is blocked for xmodem buffer
+;; $0400-04FF is blocked for xmodem testing (temporary)
 
 ;;;;;;;;;;;;;;;;;
 ;;;
@@ -39,23 +58,70 @@ INPUT        = $0200   ; block out this page for input
 ;;;;;;;;;;;;;;;;;
 
 #include "decl.a65"
-#include "init.a65"
 
-jmp main
+jmp startup
 
+;; MOVING THE DISPATCH TABLE TO HERE TO MAKE IT EASIER TO FIND
+;; WHEN DEBUGGING
+;;
+
+
+;;; Dispatch table
+;;; each entry has a two-byte pointer to the next entry (or $0000 on end)
+;;; then a null-terminated string that names the command
+;;; then a two-type pointer for the code to execute the command
+;;;
+table
+  .word table1
+  .byte "about", $00
+  .word aboutcmd
+table1
+  .word table2
+  .byte "help", $00
+  .word helpcmd
+table2
+  .word table3
+  .byte "dump", $00
+  .word dumpcmd
+table3
+  .word table4
+  .byte "echo", $00
+  .word echocmd
+table4
+  .word table5
+  .byte "poke", $00
+  .word pokecmd
+table5
+  .word table6
+  .byte "go", $00
+  .word gocmd
+table6
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "test", $00
+  .word testcmd
+
+
+;; More utility routines
+;;
 #include "stack.a65"
 
+;; Finally -- we actually start executing code
+;;
+startup
+#include "init.a65"
 
-main
 init_acia
-
   lda #%00001011		;No parity, no echo, no interrupt
   sta ACIA_COMMAND
   lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
   sta ACIA_CONTROL
 
+;; done with initialization. start actually being a monitor
+;;
+
+main
 ;;;
-;;; next, display a greeting
+;;; first, display a greeting
 ;;;
 sayhello
   ldy #0
@@ -80,6 +146,7 @@ wait_txd_empty
 ;;;
 reploop
 .(
+  ;; print the prompt
 wait_txd_empty  
   lda ACIA_STATUS
   and #$10
@@ -112,22 +179,32 @@ backspace
   jsr puta           ; does this work?
   jmp read
 
-done
   ;; this is where we land if the line input has finished
   ;;
-  lda #$0
-  sta INPUT,y        ; null-terminate the string
-  jsr parsecmd
+done
+  ;; echo new newline
+  ;;
   jsr crlf
-  ;;jsr testparse      ; debugging output for test purposes
-  jsr matchcommand   ; match and execute
-  jmp reploop        ; loop around
+
+  ;; nothing entered? loop again
+  cpy #0
+  beq reploop
+
+  ;; parse and process the command line
+  ;;
+;  stz INPUT,y        ; null-terminate the string
+  lda #0
+  sta INPUT,y
+  jsr parsecmd
+  jsr testparse     ; debugging output for test purposes
+  jsr matchcommand  ; match and execute
+  jmp reploop       ; loop around
 
 
 
 
 parsecmd
-  phx                ; preserve x, since it's our private stack pointer
+  phx               ; preserve x, since it's our private stack pointer
   ldx #0
   ldy #0
 
@@ -142,14 +219,14 @@ nextchar
 
 ;; mark the start of the word
 nonspace
-  iny      ; count of words in y
+  iny               ; maintain a count of words in y
   stx ARGINDEX,y
 ;; look for space
 lookforspace
   inx
   lda INPUT,x
-  beq endofline       ; check for null termination
-  cmp #32             ; only looking for spaces. Tab?
+  beq endofline     ; check for null termination
+  cmp #32           ; only looking for spaces. Tab?
   beq endofword
   jmp lookforspace
 ;; didn't hit a terminator, so there must be more.
@@ -208,40 +285,6 @@ donetestparse
 ;;; Command lookup/dispatch
 ;;;
 ;;;;;;;;;;;;;
-
-;;; Dispatch table
-;;; each entry has a two-byte pointer to the next entry (or $0000 on end)
-;;; then a null-terminated string that names the command
-;;; then a two-type pointer for the code to execute the command
-;;;
-table
-  .word table1
-  .byte "about", $00
-  .word aboutcmd
-table1
-  .word table2
-  .byte "help", $00
-  .word helpcmd
-table2
-  .word table3
-  .byte "dump", $00
-  .word dumpcmd
-table3
-  .word table4
-  .byte "echo", $00
-  .word echocmd
-table4
-  .word table5
-  .byte "poke", $00
-  .word pokecmd
-table5
-  .word table6
-  .byte "go", $00
-  .word gocmd
-table6
-  .word $0000            ; this signals it's the last entry in the table
-  .byte "test", $00
-  .word testcmd
 
 
 matchcommand
@@ -751,6 +794,60 @@ wait_txd_empty2
   ply
   rts
 
+
+;; memory test
+;;
+memtest
+
+writetest
+  stz MEMTESTBASE
+  lda #$05
+  sta MEMTESTBASE+1
+
+  ;; for page x, write x into each byte
+.(
+nextpage
+  ldy #$00
+  lda MEMTESTBASE+1
+loop
+  sta (MEMTESTBASE),y
+  iny
+  bne loop
+
+  ;lda BASE+1
+  inc
+  cmp #$80          ; stop when we hit the upper half of memory
+  beq readtest
+  sta MEMTESTBASE+1
+  bra nextpage
+.)
+
+readtest
+  stz MEMTESTBASE
+  lda #$05
+  sta MEMTESTBASE+1
+
+.(
+  ;; each byte should be the same as the page
+nextpage
+  ldy #$00
+loop
+  lda (MEMTESTBASE),y
+  cmp MEMTESTBASE+1
+  bne testerr
+  iny
+  bne loop
+  inc MEMTESTBASE+1
+  cmp #$80
+  beq exit
+  bra nextpage
+testerr
+  jsr memtesterr
+exit
+  plx
+  rts
+.)  
+
 ;;;
 ;;; this is for doing indirect subroutine jumps. store the subroutine
 ;;; address at $0050 and $0051, then do a JSR to here, causing a jump,
@@ -760,12 +857,34 @@ indjsr
   jmp (INDJSRVEC)
 
 
+memtesterr
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda memerrstr,y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+  jsr crlf
+.)
+  rts
+
+
+
+
+
 ;;;
 ;;; Various string constants
 ;;;
 
 hextable:	 .byte "0123456789ABCDEF"
-greeting:	 .byte "6502 Mite SBC simple mmonitor v06. Hi Paul.", $0d, $0a, $00
+greeting:	 .byte "6502 Mite SBC simple monitor v06. Hi Paul.", $0d, $0a, $00
 prompt:		 .byte "*"
 helpstring:	 .byte "Commands available: echo, help, about, dump, poke, go", $0d, $0a, $00
 errorstring:	 .byte "Command not recognized", $0d, $0a, $00
@@ -773,4 +892,5 @@ implementstring: .byte "Not yet implemented", $0d, $0a, $00
 dumperrstring:   .byte "Usage: dump hexaddress [count:10]", $00
 pokeerrstring:   .byte "Usage: poke hexaddress hexvalue", $00
 goerrstring:	 .byte "Usage: go hexaddress", $00
+memerrstr:	 .byte "Memory test failed", $00
 char:		 .byte "."
