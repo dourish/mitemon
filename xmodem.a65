@@ -11,10 +11,6 @@
 ;;; Paul Dourish, September 2017
 ;;;
 
-;; QUICK HACK FOR TESTING -- THIS CODE IS DOUBLED, BUT ONE VERSION
-;; READS FROM A TEST BUFFER AND THE OTHER READS FROM THE SERIAL PORT
-
-
 XBLOCKNO    = $0030
 XBLOCKINV   = $0031
 XBLOCKCOUNT = $0032
@@ -23,158 +19,7 @@ XDESTADDR   = $0034 ; and $0035
 BUFFER      = $0036 ; and $0037
 
 
-;; entry point for test version -- CAN BE REMOVED SHORTLY
-;;
-xmodemtest
-  ;; first, print a message announcing that we're listening
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda startstr,y
-  beq endstr
-  sta ACIA_DATA
-  iny
-  bra next_char
-endstr
-  jsr crlf
-.)
 
-.(
-  phx               ; preserve operand stack pointer
-
-  ; load up the destination location. for the moment, that's just
-  ; a test block in memory ($0400)
-  stz XDESTADDR
-  lda #$04
-  sta XDESTADDR+1
-
-  ; load up the buffer location. this is purely during test -- don't need
-  ; it after
-  LDA #<XBUFFER
-  STA BUFFER
-  LDA #>XBUFFER
-  STA BUFFER+1
-
-  stz XBLOCKCOUNT
-  ldy #$0
-  ldx #0
-
-nextblock
-  ;; anything?
-  jmp processbuffer
-  .byte "PAUL"
-
-;; check header data and block number
-processbuffer
-  jsr geta
-  cmp #$04          ; end-of-transmission?
-  beq endoftransmission
-  cmp #$01          ; start-of-header?
-  beq processblock
-  jsr headererror
-  jmp error
-
-processblock
-  ;; get block number and inverse block number
-  jsr geta
-  sta XBLOCKNO
-  jsr geta
-  sta XBLOCKINV
-  sec
-  lda #255
-  sbc XBLOCKNO
-  cmp XBLOCKINV     ; does block number match inverse block number?
-  beq checkblockcount
-  jsr blockcounterror
-  jmp error
-
-checkblockcount
-  inc XBLOCKCOUNT
-  lda XBLOCKCOUNT
-  cmp XBLOCKNO      ; does it match what we were expecting?
-  beq processdata
-  jsr blockcounterror
-  jmp error
-
-processdata
-  stz XCHKSUM
-  ldy #0
-nextbyte
-  jsr geta
-  sta (XDESTADDR),y
-  clc
-  adc XCHKSUM
-  sta XCHKSUM
-  iny
-  cpy #$80
-  bne nextbyte
-endofblock
-  jsr geta
-  cmp XCHKSUM
-  beq checksumok
-  jsr putax
-  lda XCHKSUM
-  jsr putax
-  jsr checksumerror
-  jmp error
-checksumok
-  ;; update the destination address by 128 ($80)
-  lda #$80
-  clc
-  adc XDESTADDR
-  sta XDESTADDR
-  lda XDESTADDR+1
-  adc #0
-  sta XDESTADDR+1
-  bra nextblock
-
-;; what do i do at this point? just say "OK"?
-endoftransmission
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda recvdstr,y
-  beq endstr
-  sta ACIA_DATA
-  iny
-  bra next_char
-endstr
-  jsr crlf
-.)
-  jmp endxmodem
-
-error
-
-endxmodem
-  plx               ; restore operand stack pointer in x
-  rts
-.)
-
-;; when this runs for real, geta will get a character from the IO
-;; but for now, it's going to read out of a predefined buffer
-geta
-  lda (BUFFER)
-  pha
-  lda BUFFER
-  clc
-  adc #1
-  sta BUFFER
-  lda BUFFER+1
-  adc #0
-  sta BUFFER+1
-  pla
-  rts
-
-
-;; SECOND COPY HERE -- THE SERIAL VERSION
 ;; entry point
 ;;
 xmodemrecv
@@ -200,16 +45,18 @@ endstr
 
   ; load up the destination location. for the moment, that's just
   ; a test block in memory ($0400)
-  stz XDESTADDR
-  lda #$04
-  sta XDESTADDR+1
+  ; THIS CODE REMOVED NOW THAT WE'RE GETTING IT FROM PARAMETER
+  ;stz XDESTADDR
+  ;lda #$04
+  ;sta XDESTADDR+1
 
   ; load up the buffer location. this is purely during test -- don't need
   ; it after
-  LDA #<XBUFFER
-  STA BUFFER
-  LDA #>XBUFFER
-  STA BUFFER+1
+  ; THIS CODE REMOVED NOW THAT WE ARE READING LIVE FROM SERIAL
+  ;LDA #<XBUFFER
+  ;STA BUFFER
+  ;LDA #>XBUFFER
+  ;STA BUFFER+1
 
   stz XBLOCKCOUNT
   ldy #$0
@@ -255,7 +102,7 @@ processbuffer
   cmp #$01          ; start-of-header?
   beq processblock
   jsr headererror
-  jmp error
+  jmp xmerror
 
 processblock
   ;; get block number and inverse block number
@@ -269,7 +116,7 @@ processblock
   cmp XBLOCKINV     ; does block number match inverse block number?
   beq checkblockcount
   jsr blockcounterror
-  jmp error
+  jmp xmerror
 
 checkblockcount
   inc XBLOCKCOUNT
@@ -277,7 +124,7 @@ checkblockcount
   cmp XBLOCKNO      ; does it match what we were expecting?
   beq processdata
   jsr blockcounterror
-  jmp error
+  jmp xmerror
 
 processdata
   stz XCHKSUM
@@ -299,7 +146,7 @@ endofblock
   lda XCHKSUM
   jsr putax
   jsr checksumerror
-  jmp error
+  jmp xmerror
 checksumok
   ;; send an ACK
   lda #$06
@@ -325,10 +172,16 @@ endoftransmission
   jsr puta
 
 .(
+  ;; this is just to generate a pause. entirely arbitrary.
+  ;;
+  lda #$10
+fullloop
   ldy #$0
 busywait
   iny
   bne busywait
+  dec
+  bne fullloop
 .)  
 
   jsr crlf
@@ -349,7 +202,7 @@ endstr
 .)
   jmp endxmodem
 
-error
+xmerror
 
 endxmodem
   plx               ; restore operand stack pointer in x

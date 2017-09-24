@@ -108,9 +108,13 @@ table8
   .byte "romram", $00
   .word romramcmd
 table9
-  .word $0000            ; this signals it's the last entry in the table
+  .word table10
   .byte "xreceive", $00
   .word xreceivecmd
+table10
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "zero", $00
+  .word zerocmd
 
 
 ;; More utility routines
@@ -704,6 +708,89 @@ enddumpcmd
   rts
 .)
 
+;;; zero command -- zero out a block of memory. Two parameters just
+;;; like dump.
+;;;
+zerocmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #2
+  beq twoparam        ; two parameters (ie instruction plus address)
+  cmp #3
+  beq threeparam      ; three parameters (instruction, address, count)
+  jmp error           ; neither 2 nor 3, so there's an error
+twoparam              ; only two parameters specified, so fill in third
+  lda #$10            ; default number of bytes to dump
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  bra finishparam
+threeparam            ; grab both parameters and push them
+  clc
+  lda #<INPUT
+  adc ARGINDEX+3
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read8hex
+finishparam           ; process the (first) address parameter
+  clc
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read16hex
+
+  ;; now we actually do the work
+  ;; stash base address at SCRATCH
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+  
+loop
+  ldy stackbase+3,x ; the byte count is at stackbase+3,x
+  beq donezero      ; if we're done, stop
+  dey               ; otherwise, decrement the count in y
+  sty stackbase+3,x ; put it back
+  lda #0            ; and store a zero...
+  sta (SCRATCH),y   ; in the base address plus y
+  bra loop
+
+donezero
+  ;; finished, so pop two 16-bit values off the stack
+  inx
+  inx
+  inx
+  inx
+  jmp endzerocmd
+
+error
+  ldy #0
+  ;; do error
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda zeroerrstring,y
+  beq enderr
+  sta ACIA_DATA
+  iny
+  jmp next_char
+enderr
+  jsr crlf
+
+endzerocmd
+  rts
+.)
+
+
 
 ;;; NEW go command, using stack-based parameter processing
 ;;;
@@ -749,11 +836,58 @@ end
 .)
 
 testcmd
-  jsr xmodemtest
+  ;jsr xmodemtest
   rts
 
 xreceivecmd
-  jsr xmodemrecv
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #2
+  beq processparam
+  jmp error
+
+processparam           ; process the address parameter
+  clc
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  ;; BUG?? shouldn't there be an ADC #0 in here?
+  ;; it works as long as INPUT starts low on a page and so the
+  ;; upper byte never changes.. but this is an error!
+  sta stackaccess+1
+
+  jsr push16        ; put the string address on the stack
+  jsr read16hex     ; convert string to a number value
+  jsr pop16         ; pop number, leave in stackaccess
+
+  lda stackaccess   ; copy 16 bit address into XDESTADDR
+  sta XDESTADDR
+  lda stackaccess+1
+  sta XDESTADDR+1
+
+  jsr xmodemrecv    ; call the receive command
+  jmp xmreturn
+
+error
+  ldy #0
+  ;; do error
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda xrecverrstring,y
+  beq end
+  sta ACIA_DATA
+  iny
+  jmp next_char
+end
+  jsr crlf
+
+.)
+xmreturn
   rts
 
 #include "xmodem.a65"
@@ -1014,11 +1148,13 @@ endstr
 hextable:	 .byte "0123456789ABCDEF"
 greeting:	 .byte "6502 Mite SBC simple monitor v07. Hi Paul.", $0d, $0a, $00
 prompt:		 .byte "*"
-helpstring:	 .byte "Commands available: echo, help, about, dump, poke, go, xreceive, test", $0d, $0a, $00
+helpstring:	 .byte "Commands available: echo, help, about, dump, poke, zero, go, xreceive, test", $0d, $0a, $00
 errorstring:	 .byte "Command not recognized", $0d, $0a, $00
 implementstring: .byte "Not yet implemented", $0d, $0a, $00
 dumperrstring:   .byte "Usage: dump hexaddress [count:10]", $00
 pokeerrstring:   .byte "Usage: poke hexaddress hexvalue", $00
 goerrstring:	 .byte "Usage: go hexaddress", $00
+zeroerrstring:	 .byte "Usage: zero hexaddress [count:10]", $00
+xrecverrstring:  .byte "Usage: xreceive hexaddress", $00
 memerrstr:	 .byte "Memory test failed", $00
 char:		 .byte "."
