@@ -104,9 +104,13 @@ table7
   .byte "memtest", $00
   .word memtestcmd
 table8
-  .word $0000            ; this signals it's the last entry in the table
+  .word table9
   .byte "romram", $00
   .word romramcmd
+table9
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "xreceive", $00
+  .word xreceivecmd
 
 
 ;; More utility routines
@@ -116,6 +120,27 @@ table8
 ;; Finally -- we actually start executing code
 ;;
 startup
+
+  ;; the very first thing we do is to clear the memory
+  ;; used to do this in a subrouting, but of course it trashes
+  ;; the stack!
+clearmem
+.(
+  stz $00
+  stz $01
+nextpage
+  ldy #0
+  lda #0
+clearloop
+  sta ($00),y
+  iny
+  bne clearloop
+  inx
+  stx $01
+  cpx #$80
+  bne nextpage
+.)
+
 #include "init.a65"
 
 init_acia
@@ -124,7 +149,6 @@ init_acia
   lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
   sta ACIA_CONTROL
 
-  jsr clearmem
   jsr initstack
 
 ;; done with initialization. start actually being a monitor
@@ -207,7 +231,7 @@ done
   lda #0
   sta INPUT,y
   jsr parsecmd
-  jsr testparse     ; debugging output for test purposes
+;  jsr testparse     ; debugging output for test purposes
   jsr matchcommand  ; match and execute
   jmp reploop       ; loop around
 
@@ -722,6 +746,10 @@ end
 .)
 
 testcmd
+  jsr xmodemtest
+  rts
+
+xreceivecmd
   jsr xmodemrecv
   rts
 
@@ -972,23 +1000,6 @@ endstr
 .)
   rts
 
-.byte "HEYMAN"
-clearmem
-  stz $00
-  stz $01
-  ldx #0
-nextpage
-  ldy #0
-  lda #0
-clearloop
-  sta ($00),y
-  iny
-  bne clearloop
-  inx
-  sta $01
-  cpx #$80
-  bne nextpage
-  rts
 
 
 
