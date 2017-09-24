@@ -1,0 +1,159 @@
+;; Calculate primes 0-255 via the sieve of eratosthenes
+;; loop through the results on LEDs connected to the VIA.
+;;
+;; Paul Dourish, January 3, 2017
+;;
+
+; variables
+datapage = $1000
+value = $00f0
+
+;; ACIA (6551) registers
+;;
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_COMMAND = $8802
+ACIA_CONTROL = $8803
+
+* = $0400
+
+entry
+  phx               ; preseverve pointer for operand stack
+
+;; zero out a page of data. we use this to keep track of values
+;; that have been eliminated.
+  ldx #255
+  lda #0
+zeroloop
+  sta datapage,x
+  dex
+  bne zeroloop
+
+;; ignore 0 and 1, neither of which are prime.
+  lda #1
+  ldx #0
+  sta datapage,x
+  inx
+  sta datapage,x
+
+;; step through each possible value. if it's a 0 in the table, then it's
+;; prime, in which case we should eliminate all its multiples from the table
+;; x is our index as we step through the table.
+mainloop
+  inx
+  beq finish                   ; when we loop around, we're done
+  lda datapage,x               ; if it's zero, it's prime
+  bne mainloop
+  
+  ;; x is prime, so cancel out multiples, which we find by successive addition
+  stx value                    ; cache a copy
+  txa
+multloop
+  adc value                    ; find the next multiple
+  bcs done                     ; bail when we exceed 255
+  tay
+  lda #1
+  sta datapage,y
+  tya
+  jmp multloop
+
+done 
+  clc     
+  jmp mainloop
+
+
+;; once we've identified the primes, start to display them. ends in infinite loop.
+;;
+finish
+  ldx #0
+displayloop
+  lda datapage,x
+  bne next
+  ; otherwise, print it out
+  txa
+  jsr putax
+  lda #$20
+  jsr puta
+next
+  inx
+  beq return
+  jmp displayloop
+return
+  jsr crlf
+  plx
+  rts
+
+
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+
+;;;
+;;; output the character code in the accumulator
+;;;
+puta
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+
+crlf
+  lda #$0a
+  jsr puta
+  lda #$0d
+  jsr puta
+  rts
+
+        
+
+// a "longpause" is about a second at 500 kHz.
+longpause
+  LDX #255
+longouter
+  LDY #255
+longinner
+  DEY
+  BNE longinner
+  DEX
+  BNE longouter
+  RTS
+
+
+hextable:        .byte "0123456789ABCDEF"
