@@ -1,13 +1,15 @@
 
 
-;;
-;; Basic xmodem implementation (receive only)
-;; Super simplistic. So far, this (1) doesn't implement any timeouts, and
-;; (2) bascially presumes that everything goes great or all it all just
-;; konks out.
-;;
-;; Paul Dourish, September 2017
-;;
+;;;
+;;; Basic xmodem implementation (receive only)
+;;; Super simplistic. So far, this (1) doesn't implement any timeouts, and
+;;; (2) bascially presumes that everything goes great or all it all just
+;;; konks out... it presumes blocks will keep on going up and that there
+;;; will never be re-transmissions, etc. All these are reasonable
+;;; assumptions over a USB serial line that's only a couple of feet long.
+;;;
+;;; Paul Dourish, September 2017
+;;;
 
 ;; QUICK HACK FOR TESTING -- THIS CODE IS DOUBLED, BUT ONE VERSION
 ;; READS FROM A TEST BUFFER AND THE OTHER READS FROM THE SERIAL PORT
@@ -21,7 +23,7 @@ XDESTADDR   = $0034 ; and $0035
 BUFFER      = $0036 ; and $0037
 
 
-;; entry point
+;; entry point for test version -- CAN BE REMOVED SHORTLY
 ;;
 xmodemtest
   ;; first, print a message announcing that we're listening
@@ -213,14 +215,41 @@ endstr
   ldy #$0
   ldx #0
 
-nextblock
-  ;; anything?
-  jmp processbuffer
-  .byte "PAUL"
+  ;; okay, now we wait for transmission to start. the deal here is that
+  ;; we are meant to listen with 10-second timeouts, and sent a NACK
+  ;; every ten seconds, one of which will signal to the other end that
+  ;; we are ready to go. However, we don't have a timer set up anywhere.
+  ;; so I'm going to cheat -- we will basically listen for 256x256 loops,
+  ;; and send an ACK after that. it will actually just be a second or two.
+waitstart
+  ldy #$0
+  ldx #$0
+.(
+wait_rxd_full    
+  inx               ; counting up to 256
+  beq bumpy         ; count cycled, so increment Y
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+  jmp gotfirstchar
+bumpy
+  iny               ; counting up to 256
+  beq sendnack      ; Y has cycled, so we've looped 256*256 times
+  bra wait_rxd_full  
+sendnack
+  ;; send a nack
+  lda #$15
+  jsr puta
+  bra wait_rxd_full
+.)
+gotfirstchar
+  ldx #$0           ; reset X and Y
+  ldy #$0
 
+nextblock
 ;; check header data and block number
 processbuffer
-  jsr getserial
+  jsr getserial     ; get first character (if we don't already have it)
   cmp #$04          ; end-of-transmission?
   beq endoftransmission
   cmp #$01          ; start-of-header?
@@ -272,6 +301,10 @@ endofblock
   jsr checksumerror
   jmp error
 checksumok
+  ;; send an ACK
+  lda #$06
+  jsr puta
+
   ;; update the destination address by 128 ($80)
   lda #$80
   clc
@@ -280,10 +313,25 @@ checksumok
   lda XDESTADDR+1
   adc #0
   sta XDESTADDR+1
+  ;; and loop for next block
+
   bra nextblock
 
-;; what do i do at this point? just say "OK"?
+;; Send an ACK. Pause briefly to allow the connection to be torn down.
+;; Then print a message to signal successful completion.
 endoftransmission
+  ;; send an ACK
+  lda #$06
+  jsr puta
+
+.(
+  ldy #$0
+busywait
+  iny
+  bne busywait
+.)  
+
+  jsr crlf
   ldy #0
 .(
 next_char

@@ -124,22 +124,22 @@ startup
   ;; the very first thing we do is to clear the memory
   ;; used to do this in a subrouting, but of course it trashes
   ;; the stack!
-clearmem
-.(
-  stz $00
-  stz $01
-nextpage
-  ldy #0
-  lda #0
-clearloop
-  sta ($00),y
-  iny
-  bne clearloop
-  inx
-  stx $01
-  cpx #$80
-  bne nextpage
-.)
+;clearmem
+;.(
+;  stz $00
+;  stz $01
+;nextpage
+;  ldy #0
+;  lda #0
+;clearloop
+;  sta ($00),y
+;  iny
+;  bne clearloop
+;  inx
+;  stx $01
+;  cpx #$80
+;  bne nextpage
+;.)
 
 #include "init.a65"
 
