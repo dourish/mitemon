@@ -9,6 +9,7 @@
 ;;; v4 does basic command dispatch and some simple commands
 ;;; v5 rebuilding around a stack-based calling convention
 ;;; v6 adding XMODEM to upload files and a memory test
+;;; v7 finished XMODEM, added "zero" command, rationalized code, squashed bugs
 ;;;
 ;;; Paul Dourish, March-October 2017
 ;;;
@@ -40,9 +41,9 @@ SCRATCH    = $0010  ; through to $001F
 
 ARGINDEX   = $0020  ; and on to $002F for up to 16 arguments
 ;; block $0030-003F for xmodem variables
-TMP1       = $0040  ; couldn't I use SCRATCH for this?
+;; $0040 is free
 ;; $0041 is free
-INDJSRVEC  = $0042  ; and $0043  ;; NOTE not used any more?
+PRINTVEC   = $0042  ; and $0043. for printing routine.
 ENTRY	   = $0044  ; and $0045
 MEMTESTBASE= $0046  ; and $0047
 ;; $0080-00FF is my operand stack
@@ -296,7 +297,7 @@ testparse
   cpy #0            ; test for no arguments
   beq donetestparse
   iny               ; add one to get a guard value
-  sty TMP1          ; store in TMP1. when we get to this value, we stop
+  sty SCRATCH       ; store in SCRATCH. when we get to this value, we stop
   ldy #1            ; start at 1
 nextarg
   clc
@@ -317,7 +318,7 @@ donearg
   ;; output carriage return/line feed and see if there are more arguments
   jsr crlf
   iny
-  cpy TMP1
+  cpy SCRATCH
   bne nextarg       ; not hit guard yet, so repeat
 donetestparse
   plx
@@ -1109,14 +1110,6 @@ copyloop:
 
   JMP delaycode // starts the whole thing going
 
-
-;;;
-;;; this is for doing indirect subroutine jumps. store the subroutine
-;;; address at $0050 and $0051, then do a JSR to here, causing a jump,
-;;; and when execution hits an RTS, it'll return to where the JSR was
-;;; executed.
-indjsr
-  jmp (INDJSRVEC)
 
 
 memtesterr
