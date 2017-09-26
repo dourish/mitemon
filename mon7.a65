@@ -649,7 +649,7 @@ printbyte
   jsr putax
   lda #$20
   jsr puta
-  cpy #$08          ; if at 8, print extra separator
+  cpy #$07          ; if at the eighth, print extra separator
   bne nextbyte
   jsr puta
 nextbyte            ; inc and move on to next byte

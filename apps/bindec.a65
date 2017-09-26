@@ -1,0 +1,105 @@
+
+
+; woz version
+
+*=$0400
+
+;HEX0        EQU        0        BINARY ARGUMENT (LOW BYTE) 
+;HEX1        EQU        1 
+;DEC0        EQU        2        (LOW BYTE) 
+;DEC1        EQU        3        DECIMAL RESULT 
+;DEC2        EQU        4        (HIGH BYTE) 
+
+DEC0=$0010
+DEC1=$0011
+DEC2=$0012
+
+
+bin2dec
+
+  ;; for test purposes, just read the binary data out of
+  ;; $0500 and $0501, and write the string result into
+  ;; the four bytes that follow.
+
+  ;; temporary storage will be in the SCRATCH area
+  lda #0
+  stz DEC0
+  stz DEC1
+  sed
+  ldy #16
+
+loop
+  asl $0500
+  rol $0501
+  lda DEC0
+  adc DEC0
+  sta DEC0
+  lda DEC1
+  adc DEC1
+  sta DEC1
+  rol DEC2
+  dey
+  bne loop
+
+  cld
+
+  // we have the result in DEC0 through DEC2, as BCD. now turn that into
+  // a five-character string (since max is 65535).
+  //
+
+  // could do this using y as an index and looping.. rather than unrolling
+  // as here
+
+  ;; decimal 2
+  ;; mask off lower four bits
+  lda DEC2
+  and #%00001111
+  clc
+  adc #'0
+  sta $0502
+
+  ;; decimal 1
+  ;; first, upper four bits
+  lda DEC1
+  and #%11110000
+  clc
+  ror
+  ror
+  ror
+  ror
+  clc
+  adc #'0
+  sta $0503
+
+  ;; and then lower four bits
+  lda DEC1
+  and #%00001111
+  clc
+  adc #'0
+  sta $0504
+
+  ;; and finally decimal 0
+  ;; first, upper four bits
+  lda DEC0
+  and #%11110000
+  clc
+  ror
+  ror
+  ror
+  ror
+  clc
+  adc #'0
+  sta $0505
+
+  ;; and then lower four bits
+  lda DEC0
+  and #%00001111
+  clc
+  adc #'0
+  sta $0506
+
+  ;; null-terminal for good measure
+  stz $0507
+
+  rts
+

@@ -1,0 +1,62 @@
+
+*=0400
+
+;;;
+;;; reads a string of decimal digits, converts into
+;;; binary
+;;;
+
+INPUT=$0500         ; five digits in string order
+PARTIAL=$0508
+TMP=$050e
+
+decbin
+  stz PARTIAL       ; zero out temporary storage
+  stz PARTIAL+1
+
+  ldy #0            ; y indexes the digits as we go
+
+nextdigit
+  lda INPUT,y
+  sec
+  sbc #$30          ; turn from ascii digit into a number
+  clc               ; add it to our partial result
+  adc PARTIAL
+  sta PARTIAL
+  lda PARTIAL+1
+  adc #0
+  sta PARTIAL+1
+  iny               ; bump the character count
+  cpy #5            ; was that the last digit to be read?
+  beq donelastdigit  
+
+mult10              ; no. multiply by ten and go around
+  asl PARTIAL       ; shift left to multiply by two
+  rol PARTIAL+1
+
+  lda PARTIAL       ; make a copy at TMP
+  sta TMP
+  lda PARTIAL+1
+  sta TMP+1
+
+  asl TMP           ; shift the copy left twice more, so x8 in total
+  rol TMP+1
+  asl TMP
+  rol TMP+1
+
+  clc               ; add them (8x + 2x = 10x)
+  lda TMP
+  adc PARTIAL
+  sta PARTIAL
+  lda TMP+1
+  adc PARTIAL+1
+  sta PARTIAL+1
+
+  bra nextdigit
+
+donelastdigit
+  stz TMP           ; clean up after yourself
+  stz TMP+1
+
+  rts
+
