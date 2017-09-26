@@ -1,0 +1,115 @@
+
+;; ACIA (6551) registers
+;;
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_COMMAND = $8802
+ACIA_CONTROL = $8803
+
+* = $0400
+
+;;
+;; this is going to loop forever until we reset, so don't worry about
+;; preserving anything.
+;;
+
+;; it should give me roughly second-spaced ticks at 1 MHz...
+;; and so roughly two-second spaced ones at 0.5 MHz... it's mainly
+;; about doing something that will have a perceptible difference
+;; when I change the clock!
+
+COUNT = $0060
+PRINT = $0061 ; and 0062
+
+start
+  lda #0
+  sta COUNT
+nextseq
+;; sequence of five inner loops is about 0.005s @ 1MHz
+;; so, 100 times is 0.5s and 200 times is about 1 second
+  ldx #200
+outer
+  ldy #200
+inner1              ; 5 * 200 = 1000 = 0.001s @ 1 MHz
+  dey               ; 2 cycles
+  bne inner1        ; 3 cycles when taken
+  ldy #200
+inner2              ; 5 * 200 = 1000 = 0.001s @ 1 MHz
+  dey               ; 2 cycles
+  bne inner2        ; 3 cycles when taken
+  ldy #200
+inner3              ; 5 * 200 = 1000 = 0.001s @ 1 MHz
+  dey               ; 2 cycles
+  bne inner3        ; 3 cycles when taken
+  ldy #200
+inner4              ; 5 * 200 = 1000 = 0.001s @ 1 MHz
+  dey               ; 2 cycles
+  bne inner4        ; 3 cycles when taken
+  ldy #200
+inner5              ; 5 * 200 = 1000 = 0.001s @ 1 MHz
+  dey               ; 2 cycles
+  bne inner5        ; 3 cycles when taken
+  dex
+  bne outer
+
+  lda COUNT
+  inc
+  sta COUNT
+  and #%00000001
+  beq tick
+  lda #<tockstr
+  sta PRINT
+  lda #>tockstr
+  sta PRINT+1
+  bra print
+tick
+  lda #<tickstr
+  sta PRINT
+  lda #>tickstr
+  sta PRINT+1
+print
+  jsr printstr  
+  jsr crlf
+  bra nextseq
+
+
+printstr
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda (PRINT),y
+  beq end
+  sta ACIA_DATA
+  iny
+  jmp next_char
+end
+  rts
+.)
+
+
+crlf
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0d
+  sta ACIA_DATA
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0a
+  sta ACIA_DATA
+  rts
+
+tickstr: .byte "tick", $00
+tockstr: .byte "tock", $00
+

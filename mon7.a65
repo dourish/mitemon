@@ -62,12 +62,8 @@ INPUT      = $0200  ; block out this page for monitor command input
 
 jmp startup
 
-;; MOVING THE DISPATCH TABLE TO HERE TO MAKE IT EASIER TO FIND
-;; WHEN DEBUGGING
-;;
-
-
 ;;; Dispatch table
+;;;
 ;;; each entry has a two-byte pointer to the next entry (or $0000 on end)
 ;;; then a null-terminated string that names the command
 ;;; then a two-type pointer for the code to execute the command
@@ -167,19 +163,27 @@ main
 sayhello
   jsr crlf
   jsr crlf
+  lda #<greeting
+  sta PRINTVEC
+  lda #>greeting
+  sta PRINTVEC+1
   ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda greeting,y
-  beq reploop
-  sta ACIA_DATA
-  iny
-  jmp next_char
-.)
+  jsr printvecstr
+
+;  ldy #0
+;.(
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda greeting,y
+;  beq reploop
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;.)
+  ;; greeting has CRLF included, so we don't need to print those.
 
 
 ;;;
@@ -283,6 +287,7 @@ endofline
   ;; we're done
   ;; cache the arg count
   sty ARGINDEX
+
   ;; restore x and return
   plx
   rts
@@ -339,6 +344,7 @@ matchcommand
   sta ENTRY+1
 
   phx            ; preserve x, since it's our private stack pointer
+
 testentry
 cacheptr
   ;; grab the pointer to the next entry and cache it in scratchpad
@@ -378,7 +384,6 @@ successful
   iny
   lda (ENTRY),Y
   sta SCRATCH+3
-  ;; FIX -- how do we handle parameters?
   plx     ; restore stack pointer
   jmp (SCRATCH+2)
   rts  ;; never get here -- we rts from the command code
@@ -399,22 +404,28 @@ endoftable
   ;; ...
 
 printerror
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda errorstring,y
-  beq end
-  sta ACIA_DATA
-  iny
-  jmp next_char
-end
+  lda #<nocmderrstr
+  sta PRINTVEC
+  lda #>nocmderrstr
+  sta PRINTVEC+1
+  jsr printvecstr
+  ; no need for crlf
+;  ldy #0
+;.(
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda errorstring,y
+;  beq end
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;end
+;.)
   plx    ; restore the stack pointer
   rts
-.)
 
 
 
@@ -425,38 +436,48 @@ end
 ;;;;;;;;;;;;;
 
 aboutcmd
+  lda #<greeting
+  sta PRINTVEC
+  lda #>greeting
+  sta PRINTVEC+1
+  jsr printvecstr
   ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda greeting,y
-  beq end
-  sta ACIA_DATA
-  iny
-  jmp next_char
-end
+;.(
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda greeting,y
+;  beq end
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;end
+;.)
   rts
-.)
 
 helpcmd
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda helpstring,y
-  beq end
-  sta ACIA_DATA
-  iny
-  jmp next_char
-end
+  lda #<greeting
+  sta PRINTVEC
+  lda #>greeting
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ldy #0
+;.(
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda helpstring,y
+;  beq end
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;end
+;.)
   rts
-.)
 
 notimplcmd
   ldy #0
@@ -484,6 +505,8 @@ echonext
   beq end                 ; yes, so end
   iny                     ; no, so move on to the next
   ldx ARGINDEX,y
+  ;; not using printvecstr for this because we're printing
+  ;; directly out of the input buffer  
 next_char
 wait_txd_empty  
   lda ACIA_STATUS
@@ -537,22 +560,27 @@ pokecmd
   bra end
 
 error
-  ldy #0
-  ;; do error
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda pokeerrstring,y
-  beq end
-  sta ACIA_DATA
-  iny
-  jmp next_char
+  lda #<pokeerrstring
+  sta PRINTVEC
+  lda #>pokeerrstring
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ldy #0
+;  ;; do error
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda pokeerrstring,y
+;  beq end
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
 end
+.)
   jsr crlf
   rts
-.)
 
 dumpcmd
 .(
@@ -690,19 +718,24 @@ donedump
   jmp enddumpcmd
 
 error
-  ldy #0
-  ;; do error
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda dumperrstring,y
-  beq enderr
-  sta ACIA_DATA
-  iny
-  jmp next_char
-enderr
+  lda #<dumperrstring
+  sta PRINTVEC
+  lda #>dumperrstring
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ldy #0
+;  ;; do error
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda dumperrstring,y
+;  beq enderr
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;enderr
   jsr crlf
 
 enddumpcmd
@@ -773,18 +806,23 @@ donezero
 
 error
   ldy #0
-  ;; do error
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda zeroerrstring,y
-  beq enderr
-  sta ACIA_DATA
-  iny
-  jmp next_char
-enderr
+  lda #<zeroerrstring
+  sta PRINTVEC
+  lda #>zeroerrstring
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ;; do error
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda zeroerrstring,y
+;  beq enderr
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;enderr
   jsr crlf
 
 endzerocmd
@@ -1131,6 +1169,26 @@ endstr
   rts
 
 
+;;; print the string pointed to at PRINTVEC
+;;;
+printvecstr
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda (PRINTVEC),y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+.)
+  rts
+
+
 
 
 
@@ -1139,10 +1197,10 @@ endstr
 ;;;
 
 hextable:	 .byte "0123456789ABCDEF"
-greeting:	 .byte "6502 Mite SBC simple monitor v07. Hi Paul.", $0d, $0a, $00
+greeting:	 .byte "6502 Mite SBC simple monitor v07a. Hi Paul.", $0d, $0a, $00
 prompt:		 .byte "*"
 helpstring:	 .byte "Commands available: echo, help, about, dump, poke, zero, go, xreceive, test", $0d, $0a, $00
-errorstring:	 .byte "Command not recognized", $0d, $0a, $00
+nocmderrstr:	 .byte "Command not recognized", $0d, $0a, $00
 implementstring: .byte "Not yet implemented", $0d, $0a, $00
 dumperrstring:   .byte "Usage: dump hexaddress [count:10]", $00
 pokeerrstring:   .byte "Usage: poke hexaddress hexvalue", $00
