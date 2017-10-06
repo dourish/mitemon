@@ -1,0 +1,32 @@
+
+;;; input multiple values into memory
+;;; takes a single parameter, which is the starting address
+;;; print out the address as a prompt, then read a line of input
+;;; parse the line of input into a sequence of bytes
+;;; write those bytes into memory starting at the address
+;;; begin a new line with the next address
+;;; if the entered line is blank, stop
+
+
+;;; test this out as an app
+;;; once it works, incorporate it into the monitor
+
+
+
+;;; print out the address as a prompt, then read a line of input
+  lda BASE
+  sta stackaccess
+  lda BASE+1
+  sta stackaccess+1
+  jsr push16
+  jsr print16hex
+  lda #$20
+  jsr puta
+
+  ; read a line of input?
+
+;;; parse the line of input into a sequence of bytes
+;;; write those bytes into memory starting at the address
+;;; begin a new line with the next address
+;;; if the entered line is blank, stop
+
