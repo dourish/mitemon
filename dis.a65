@@ -1,0 +1,82 @@
+
+;;; 65C02 disassembler
+;;; to be incorporated into the monitor eventually, but for now
+;;; written as a separate program.
+;;;
+;;; paul dourish, october 2017
+;;;
+
+
+;;;
+;;; i'm following details and logic from
+;;; http://www.llx.com/~nparker/a2/opcodes.html
+;;;
+
+;;; bottom two bits of instruction byte signal a block of instructions
+;;; with differnt encoding patterns. so, start there.
+
+;;; cc=01?
+
+;;; look up opcode
+; grab top three bits of the address
+; shift left four times (ie get bit pattern*2)
+; use this to index cc01 table
+; read out address of opcode string
+
+;;; handle each addressing mode
+
+;;; cc=10?
+
+;;; look up opcode
+
+;;; handle each addressing mode
+
+;;; special cases for STX and LDX
+
+;; cc = 00?
+
+;;; look up opcode
+
+;;; handle each addressing mode (NOTE same as cc=10)
+
+;;; branch instructions -- actually, these don't follow pattern so do FIRST
+
+;;; remaining special cases?
+
+
+
+
+
+cc01table
+  .word ORAstr, ANDstr, EORstr, ADCstr, STAstr, LDAstr, CMPstr, SBCstr
+
+cc10table
+  .word ASLstr, ROLstr, LSRstr, RORstr, STXstr, LDXstr, DECstr, INCstr
+
+cc00table
+  .word NONstr, BITstr, JMPstr, JMPstr, STYstr, LDYstr, CPYstr, CPXstr
+
+
+ORAstr .byte "ORA"
+ANDstr .byte "AND"
+EORstr .byte "EOR"
+ADCstr .byte "ADC"
+STAstr .byte "STA"
+LDAstr .byte "LDA"
+CMPstr .byte "CMP"
+SBCstr .byte "SBC"
+ASLstr .byte "ASL"
+ROLstr .byte "ROL"
+LSRstr .byte "LSR"
+RORstr .byte "ROR"
+STXstr .byte "STX"
+LDXstr .byte "LDX"
+DECstr .byte "DEC"
+INCstr .byte "INC"
+NONstr .byte "???"
+BITstr .byte "BIT"
+JMPstr .byte "JMP"
+STYstr .byte "STY"
+LDYstr .byte "LDY"
+CPYstr .byte "CPY"
+CPXstr .byte "CPX"

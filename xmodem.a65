@@ -158,8 +158,12 @@ endoftransmission
 
 .(
   ;; this is just to generate a pause. entirely arbitrary.
+  ;; (had to make this longer after i upped the clock speed)
+  ;; i've seen other code flush the buffer and just wait until there's
+  ;; been no new transmission for a period of a second or so. that might
+  ;; work better...
   ;;
-  lda #$10
+  lda #$30
 fullloop
   ldy #$0
 busywait

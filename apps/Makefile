@@ -2,10 +2,10 @@ XA=xa
 MKHEX=mkhex
 MKROM=mkrom
 
-%.o65: %.a65
+%.x65: %.a65
 	$(XA) -o $@ $<
 
-%.hex: %.o65
+%.hex: %.x65
 	$(MKHEX) $< > $@
 
 %.rom: %.hex
