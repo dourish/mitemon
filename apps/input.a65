@@ -29,81 +29,59 @@ INPUT      = $0200  ; block out this page for monitor command input
 BASE       = $0050  ; and $0051
 
 
-;;; print out the address as a prompt
 start
-  lda BASE
-  sta stackaccess
+  lda BASE          ; first, print the current address as a prompt
+  sta stackaccess   
   lda BASE+1
   sta stackaccess+1
-  jsr push16
-  jsr print16hex
-  lda #$20
+  jsr push16        ; put it onto the stack
+  jsr print16hex    ; print it in hex
+  lda #$20          ; output a space
   jsr puta
 
-;;; now read a line of input
-  jsr readline
+  jsr readline      ; read a line of input into the buffer
+  jsr crlf          ; echo newline
 
-  ;; echo new newline
-  ;;
-  jsr crlf
+  cpy #0            ; is the line blank?
+  beq endinput      ; if so, then end the routine
+  jsr parseinput    ; otherwise, parse the input into byte strings
 
-  ;; if the line is blank, that signals that the user is ending input
-  cpy #0
-  beq endinput
-
-;;; parse the line of input into a sequence of bytes
-   jsr parseinput
-
-;;; write those bytes into memory starting at the address
-;;; begin a new line with the next address
-
+  ;; write those bytes into memory starting at the address
+  ;; begin a new line with the next address
   ldy #1
   inc ARGINDEX      ; change from count to sentinel value
+
 nextbyte
-  cpy ARGINDEX
-  beq donebytes
-  ; get the string address
-  ;ldx ARGINDEX,y
+  cpy ARGINDEX      ; have we done all the arguments?
+  beq donebytes     ; if so, jump to the end of this round
+
   clc
-  lda #<INPUT
-  adc ARGINDEX,y
-  sta stackaccess
-  lda #>INPUT
-  adc #0
+  lda #<INPUT       ; load the base address for the input buffer
+  adc ARGINDEX,y    ; and add the offset to the y'th argument
+  sta stackaccess   ; store at stackaccess
+  lda #>INPUT       ; then the upper byte
+  adc #0            ; in case we cross page boundary (but we shouldn't)
   sta stackaccess+1
-  jsr push16
-  jsr read8hex
-  jsr pop16
-  lda stackaccess
+  jsr push16        ; push the address for the byte string
+  jsr read8hex      ; interpret as an eight-bit hex value
+  jsr pop16         ; pull off the stack
+  lda stackaccess   ; this is the byte, in the lower 8 bits
   phx
-  ldx #0
-  sta (BASE,x)
-  inc BASE
+  ldx #0            ; needed  because there's no non-index indirect mode
+  sta (BASE,x)      ; store it at the address pointed to by BASE
+  inc BASE          ; increment BASE (and possibly BASE+1)
   bne endloop
   inc BASE+1
 endloop
-  plx
-  iny
+  plx               ; restore X before we use the stack routines again
+  iny               ; move on to next entered type
   jmp nextbyte
 
 donebytes
-  ;; increment and repeat...
-  ;; already done this...
-;  clc
-;  tya
-;  adc BASE
-;  sta BASE
-;  lda BASE+1
-;  adc #0
-;  sta BASE+1
-  bra start
-  
-;;; if the entered line is blank, stop
+  bra start         ; again with the next line
 
 endinput
-  ; restore x? -- nope, no need
-  ; return
-  rts
+  rts               ; return (X already restored)
 
 
 
