@@ -1,0 +1,1302 @@
+;;;
+;;; MITEMON
+;;;
+;;; Very simple ROM monitor for the 6502 Mite single-board computer.
+;;; Just basically enough to poke around and make sure that things
+;;; are working.
+;;;
+;;; v3 parses command line arguments
+;;; v4 does basic command dispatch and some simple commands
+;;; v5 rebuilding around a stack-based calling convention
+;;; v6 adding XMODEM to upload files and a memory test
+;;; v7 finished XMODEM, added "zero" command, rationalized code, squashed bugs
+;;; v8 added input command
+;;;
+;;; Paul Dourish, March-October 2017
+;;;
+
+;;; My ROM is actually 32K, but the lower half ($8000-$BFFF) is masked
+;;; by IO. So, everything starts at $C000.
+;;;
+* = $C000
+
+;;;;;;;;;;;;;;;;;
+;;;
+;;; Zero page and other storage areas. Various parts of the zero page
+;;; are used for scratch and for key data.
+;;;
+;;; A line of entered text is stored in INPUT. ARGINDEX is used
+;;; by the parser to record where each individual argument begins.
+;;; ARGINDEX[0] is a count of the number of words on the command
+;;; line. ARGINDEX[1-n] are pointers into where, inside INDEX, each
+;;; word begins (ie, ARGINDEX[1] is the index inside INPUT where
+;;; the first argument string begins).
+;;;
+;;;;;;;;;;;;;;;;;;
+
+;; these 16 address are basic scratch memory, for use only inside
+;; a few instructions... not guaranteed safe across a subroutine call,
+;; for instance.
+;;
+SCRATCH    = $0010  ; through to $001F
+
+ARGINDEX   = $0020  ; and on to $002F for up to 16 arguments
+;; block $0030-003F for xmodem variables
+;; $0040 is free
+;; $0041 is free
+PRINTVEC   = $0042  ; and $0043. for printing routine.
+ENTRY	   = $0044  ; and $0045
+MEMTESTBASE= $0046  ; and $0047
+;; $0080-00FF is my operand stack
+;; $0100-01FF is 6502 stack
+INPUT      = $0200  ; block out this page for monitor command input
+;; $0300-03FF is blocked for xmodem buffer
+;; $0400-04FF is blocked for xmodem testing (temporary)
+
+;;;;;;;;;;;;;;;;;
+;;;
+;;; Include standard startup code
+;;;
+;;;;;;;;;;;;;;;;;
+
+#include "decl.a65"
+
+jmp startup
+
+;;; Dispatch table
+;;;
+;;; each entry has a two-byte pointer to the next entry (or $0000 on end)
+;;; then a null-terminated string that names the command
+;;; then a two-type pointer for the code to execute the command
+;;;
+table
+  .word table1
+  .byte "about", $00
+  .word aboutcmd
+table1
+  .word table2
+  .byte "help", $00
+  .word helpcmd
+table2
+  .word table3
+  .byte "dump", $00
+  .word dumpcmd
+table3
+  .word table4
+  .byte "echo", $00
+  .word echocmd
+table4
+  .word table5
+  .byte "poke", $00
+  .word pokecmd
+table5
+  .word table6
+  .byte "go", $00
+  .word gocmd
+table6
+  .word table7
+  .byte "test", $00
+  .word testcmd
+table7
+  .word table8
+  .byte "memtest", $00
+  .word memtestcmd
+table8
+  .word table9
+  .byte "romram", $00
+  .word romramcmd
+table9
+  .word table10
+  .byte "xreceive", $00
+  .word xreceivecmd
+table10
+  .word table11
+  .byte "zero", $00
+  .word zerocmd
+table11
+  .word $0000            ; this signals it's the last entry in the table
+  .byte "input", $00
+  .word inputcmd
+
+
+;; More utility routines
+;;
+#include "stack.a65"
+
+;; Finally -- we actually start executing code
+;;
+startup
+
+  ;; the very first thing we do is to clear the memory
+  ;; used to do this in a subrouting, but of course it trashes
+  ;; the stack!
+;clearmem
+;.(
+;  stz $00
+;  stz $01
+;nextpage
+;  ldy #0
+;  lda #0
+;clearloop
+;  sta ($00),y
+;  iny
+;  bne clearloop
+;  inx
+;  stx $01
+;  cpx #$80
+;  bne nextpage
+;.)
+
+#include "init.a65"
+
+init_acia
+  lda #%00001011		;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111		;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+
+  jsr initstack
+
+;; done with initialization. start actually being a monitor
+;;
+
+main
+;;;
+;;; first, display a greeting. through out a couple of newlines
+;;; first just in case there's other gunk on the screen.
+;;;
+sayhello
+  jsr crlf
+  jsr crlf
+  lda #<greeting
+  sta PRINTVEC
+  lda #>greeting
+  sta PRINTVEC+1
+  ldy #0
+  jsr printvecstr
+
+;  ldy #0
+;.(
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda greeting,y
+;  beq reploop
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;.)
+  ;; greeting has CRLF included, so we don't need to print those.
+
+
+;;;
+;;; now down to business. this is the main entrypoint for the
+;;; read/execution loop. print a prompt, read a line, parse, dispatch,
+;;; repeat.
+;;;
+reploop
+.(
+  ;; print the prompt
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda prompt
+  sta ACIA_DATA
+.)
+
+  jsr readline      ; read a line into INPUT
+  jsr crlf          ; echo line feed/carriage return
+
+  ;; nothing entered? loop again
+  cpy #0
+  beq reploop
+
+  ;; parse and process the command line
+  ;;
+  lda #0           
+  sta INPUT,y       ; null-terminate the string
+  jsr parseinput    ; parse into individual arguments, indexed at ARGINDEX
+; jsr testparse     ; debugging output for test purposes
+  jsr matchcommand  ; match input command and execute
+  jmp reploop       ; loop around
+
+
+
+
+parseinput
+  phx               ; preserve x, since it's our private stack pointer
+  ldx #0
+  ldy #0
+
+.(
+;; look for non-space
+nextchar
+  lda INPUT,x
+  cmp #32
+  bne nonspace
+  inx
+  jmp nextchar
+
+;; mark the start of the word
+nonspace
+  iny               ; maintain a count of words in y
+  stx ARGINDEX,y
+;; look for space
+lookforspace
+  inx
+  lda INPUT,x
+  beq endofline     ; check for null termination
+  cmp #32           ; only looking for spaces. Tab?
+  beq endofword
+  jmp lookforspace
+;; didn't hit a terminator, so there must be more.
+;; terminate this word with a zero and then continue
+endofword
+  lda #0
+  sta INPUT,x         ; null-terminate
+  inx
+  jmp nextchar        ; repeat
+endofline
+  ;; we're done
+  ;; cache the arg count
+  sty ARGINDEX
+
+  ;; restore x and return
+  plx
+  rts
+.)
+
+
+;;;
+;;; just for testing. echo arguments, backwards.
+;;;
+testparse
+  phx               ; preserve x
+  cpy #0            ; test for no arguments
+  beq donetestparse
+  iny               ; add one to get a guard value
+  sty SCRATCH       ; store in SCRATCH. when we get to this value, we stop
+  ldy #1            ; start at 1
+nextarg
+  clc
+  tya               ; grab the argument number
+  adc #$30          ; add 48 to make it an ascii value
+  jsr puta
+  lda #$3A          ; ascii for ":"
+  jsr puta
+  ldx ARGINDEX,y    ; load the index of the next argument into x
+nextletter
+  ;; print null-terminated string from INPUT+x
+  lda INPUT,x
+  beq donearg
+  jsr puta
+  inx
+  bne nextletter    ; use this as "branch always," will never be 0
+donearg
+  ;; output carriage return/line feed and see if there are more arguments
+  jsr crlf
+  iny
+  cpy SCRATCH
+  bne nextarg       ; not hit guard yet, so repeat
+donetestparse
+  plx
+  rts
+
+
+;;;;;;;;;;;;;
+;;;
+;;; Command lookup/dispatch
+;;;
+;;;;;;;;;;;;;
+
+
+matchcommand
+  lda #<table    ; low byte of table address
+  sta ENTRY
+  lda #>table    ; high byte of table address
+  sta ENTRY+1
+
+  phx            ; preserve x, since it's our private stack pointer
+
+testentry
+cacheptr
+  ;; grab the pointer to the next entry and cache it in scratchpad
+  ldy #0
+  lda (ENTRY),Y  ; first byte
+  sta SCRATCH
+  iny
+  lda (ENTRY),Y  ; second byte
+  sta SCRATCH+1
+  iny
+  ldx #0         ;; will use X and Yas index for string
+.(
+nextchar
+  lda INPUT,x
+  beq endofword
+  cmp (ENTRY),y
+  bne nextentry
+  inx
+  iny
+  jmp nextchar
+.)
+
+endofword
+  ;; we got here because we hit the end of the word in the buffer
+  ;; if it's also the end of the entry label, then we've found the right place
+  lda (ENTRY),y
+  beq successful
+  ;; but if it's not, then we haven't.
+  ;; continue to the next entry
+  jmp nextentry
+
+successful
+  ;; we got a match! copy out the destination address, jump to it
+  iny
+  lda (ENTRY),Y
+  sta SCRATCH+2
+  iny
+  lda (ENTRY),Y
+  sta SCRATCH+3
+  plx     ; restore stack pointer
+  jmp (SCRATCH+2)
+  rts  ;; never get here -- we rts from the command code
+    
+nextentry:
+  lda SCRATCH           ;; copy the address of next entry from scratchpad
+  sta ENTRY
+  lda SCRATCH+1
+  sta ENTRY+1
+  ;; test for null here
+  ora SCRATCH       ;; check if the entry was $0000
+  beq endoftable    ;; if so, we're at the end of table
+  jmp testentry
+
+endoftable
+  ;; got to the end of the table with no match
+  ;; print an error message, and return to line input
+  ;; ...
+
+printerror
+  lda #<nocmderrstr
+  sta PRINTVEC
+  lda #>nocmderrstr
+  sta PRINTVEC+1
+  jsr printvecstr
+  ; no need for crlf
+;  ldy #0
+;.(
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda errorstring,y
+;  beq end
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;end
+;.)
+  plx    ; restore the stack pointer
+  rts
+
+
+
+;;;;;;;;;;;;;
+;;;
+;;; Monitor commands
+;;;
+;;;;;;;;;;;;;
+
+aboutcmd
+  lda #<greeting
+  sta PRINTVEC
+  lda #>greeting
+  sta PRINTVEC+1
+  jsr printvecstr
+  ldy #0
+  rts
+
+helpcmd
+  lda #<helpstring
+  sta PRINTVEC
+  lda #>helpstring
+  sta PRINTVEC+1
+  jsr printvecstr
+  rts
+
+notimplcmd
+  lda #<implementstring
+  sta PRINTVEC
+  lda #>implementstring
+  sta PRINTVEC+1
+  jsr printvecstr
+  rts
+
+echocmd
+.(
+  phx                     ; preserve x, since it's our private stack pointer
+  ldy #1                  ; start at 1 because we ignore the command itself
+echonext
+  cpy ARGINDEX            ; have we just done the last?
+  beq end                 ; yes, so end
+  iny                     ; no, so move on to the next
+  ldx ARGINDEX,y
+  ;; not using printvecstr for this because we're printing
+  ;; directly out of the input buffer  
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda INPUT,x
+  beq endofarg
+  sta ACIA_DATA
+  inx
+  jmp next_char
+endofarg
+  lda #32                  ; put a space at the end
+  jsr puta
+  jmp echonext
+end
+  jsr crlf                 ; carriage return/line feed
+  plx                      ; restore the stack pointer
+  rts
+.)
+
+
+
+pokecmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #3
+  bne error        ; not three, so there's an error of some sort
+  clc
+  lda #<INPUT
+  adc ARGINDEX+3
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read8hex
+  clc
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read16hex
+
+  jsr pop16
+  lda stackbase+1,x
+  sta (stackaccess)
+  jsr putax
+  jsr pop16
+  bra end
+
+error
+  lda #<pokeerrstring
+  sta PRINTVEC
+  lda #>pokeerrstring
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ldy #0
+;  ;; do error
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda pokeerrstring,y
+;  beq end
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+end
+.)
+  jsr crlf
+  rts
+
+dumpcmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #2
+  beq twoparam        ; two parameters (ie instruction plus address)
+  cmp #3
+  beq threeparam      ; three parameters (instruction, address, count)
+  jmp error           ; neither 2 nor 3, so there's an error
+twoparam              ; only two parameters specified, so fill in third
+  lda #$10            ; default number of bytes to dump
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  bra finishparam
+threeparam            ; grab both parameters and push them
+  clc
+  lda #<INPUT
+  adc ARGINDEX+3
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read8hex
+finishparam           ; process the (first) address parameter
+  clc
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read16hex
+
+  ;; now we actually do the work
+  ;; stash base address at SCRATCH
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+nextline
+
+  phx               ; push x. X is only protected for PART of this code.
+
+  ldy #0
+
+  ;; print one line
+
+  ;; print the address
+  lda SCRATCH+1
+  jsr putax
+  lda SCRATCH
+  jsr putax
+
+  ;; print separator
+  lda #$3a         ; colon
+  jsr puta
+  lda #$20         ; space
+  jsr puta
+
+  ;; print first eight bytes
+printbyte
+  lda (SCRATCH),y
+  jsr putax
+  lda #$20
+  jsr puta
+  cpy #$07          ; if at the eighth, print extra separator
+  bne nextbyte
+  jsr puta
+nextbyte            ; inc and move on to next byte
+  iny
+  cpy #$10          ; stop when we get to 16
+  bne printbyte
+  
+  ;; print separator
+  lda #$20
+  jsr puta
+  jsr puta
+  lda #$7C          ; vertical bar
+  jsr puta          ; faster to have that as a little character string!
+
+  ;; print ascii values for 16 bytes
+  ldy #0
+nextascii
+  cpy #$10
+  beq endascii
+  lda (SCRATCH),y
+  ;; it's printable if it's over 32 and under 127
+  cmp #32
+  bmi unprintable
+  cmp #127
+  bmi printascii
+unprintable
+  lda #$2e          ; dot
+printascii
+  jsr puta
+  iny
+  bra nextascii
+endascii
+  lda #$7C          ; vertical bar
+  jsr puta          ; faster to have that as a little character string!
+  jsr crlf
+
+  ;; now bump the address and check if we should go around again
+  ;;
+  plx               ; restore x so we can work with the stack again
+  clc
+
+  ;; subtract 16 from the count
+  lda stackbase+3,x
+  sbc #$10
+  ;; don't bother with the second byte, since it's always a single byte
+  sta stackbase+3,x
+  bcc donedump
+  beq donedump
+
+  ;; going round again, so add 16 to the base address
+  clc
+  lda SCRATCH
+  adc #$10
+  sta SCRATCH
+  lda SCRATCH+1
+  adc #0
+  sta SCRATCH+1
+  jmp nextline
+
+donedump
+  ;; throw away last two items on the stack
+  inx
+  inx
+  inx
+  inx
+  jmp enddumpcmd
+
+error
+  lda #<dumperrstring
+  sta PRINTVEC
+  lda #>dumperrstring
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ldy #0
+;  ;; do error
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda dumperrstring,y
+;  beq enderr
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;enderr
+  jsr crlf
+
+enddumpcmd
+  rts
+.)
+
+;;; zero command -- zero out a block of memory. Two parameters just
+;;; like dump.
+;;;
+zerocmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #2
+  beq twoparam        ; two parameters (ie instruction plus address)
+  cmp #3
+  beq threeparam      ; three parameters (instruction, address, count)
+  jmp error           ; neither 2 nor 3, so there's an error
+twoparam              ; only two parameters specified, so fill in third
+  lda #$10            ; default number of bytes to dump
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  bra finishparam
+threeparam            ; grab both parameters and push them
+  clc
+  lda #<INPUT
+  adc ARGINDEX+3
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read8hex
+finishparam           ; process the (first) address parameter
+  clc
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read16hex
+
+  ;; now we actually do the work
+  ;; stash base address at SCRATCH
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+  
+loop
+  ldy stackbase+3,x ; the byte count is at stackbase+3,x
+  beq donezero      ; if we're done, stop
+  dey               ; otherwise, decrement the count in y
+  sty stackbase+3,x ; put it back
+  lda #0            ; and store a zero...
+  sta (SCRATCH),y   ; in the base address plus y
+  bra loop
+
+donezero
+  ;; finished, so pop two 16-bit values off the stack
+  inx
+  inx
+  inx
+  inx
+  jmp endzerocmd
+
+error
+  ldy #0
+  lda #<zeroerrstring
+  sta PRINTVEC
+  lda #>zeroerrstring
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ;; do error
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda zeroerrstring,y
+;  beq enderr
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;enderr
+  jsr crlf
+
+endzerocmd
+  rts
+.)
+
+
+
+;;; NEW go command, using stack-based parameter processing
+;;;
+gocmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #2
+  beq processparam
+  jmp error
+
+processparam           ; process the (first) address parameter
+  clc
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  sta stackaccess+1
+  jsr push16
+  jsr read16hex
+
+  jsr pop16            ; put the address into stackaccess
+  jmp (stackaccess)    ; jump directly
+  ;; no rts here because we'll rts from the subroutine
+
+error
+  lda #<goerrstring
+  sta PRINTVEC
+  lda #>goerrstring
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ldy #0
+;  ;; do error
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda goerrstring,y
+;  beq end
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+
+;end
+  jsr crlf
+  rts
+.)
+
+testcmd
+  ;jsr xmodemtest
+  rts
+
+xreceivecmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #2
+  beq processparam
+  jmp error
+
+processparam           ; process the address parameter
+  clc
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  ;; BUG?? shouldn't there be an ADC #0 in here?
+  ;; it works as long as INPUT starts low on a page and so the
+  ;; upper byte never changes.. but this is an error!
+  sta stackaccess+1
+
+  jsr push16        ; put the string address on the stack
+  jsr read16hex     ; convert string to a number value
+  jsr pop16         ; pop number, leave in stackaccess
+
+  lda stackaccess   ; copy 16 bit address into XDESTADDR
+  sta XDESTADDR
+  lda stackaccess+1
+  sta XDESTADDR+1
+
+  jsr xmodemrecv    ; call the receive command
+  jmp xmreturn
+
+error
+  lda #<xrecverrstring
+  sta PRINTVEC
+  lda #>xrecverrstring+1
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ldy #0
+;  ;; do error
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda xrecverrstring,y
+;  beq end
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;end
+  jsr crlf
+
+.)
+xmreturn
+  rts
+
+#include "xmodem.a65"
+
+
+inputcmd
+.(
+  ;; check arguments
+  lda ARGINDEX
+  cmp #2
+  beq printhelp
+  jmp error
+
+printhelp
+  ;; print a help message
+  lda #<inputhelpstring
+  sta PRINTVEC
+  lda #>inputhelpstring
+  sta PRINTVEC+1
+  jsr printvecstr
+  jsr crlf
+
+processparam           ; process the address parameter
+  clc
+  lda #<INPUT
+  adc ARGINDEX+2
+  sta stackaccess
+  lda #>INPUT
+  ;; BUG?? shouldn't there be an ADC #0 in here?
+  ;; it works as long as INPUT starts low on a page and so the
+  ;; upper byte never changes.. but this is an error!
+  sta stackaccess+1
+
+  jsr push16        ; put the string address on the stack
+  jsr read16hex     ; convert string to a number value
+  jsr pop16         ; pop number, leave in stackaccess
+
+  lda stackaccess   ; copy 16 bit address into SCRATCH
+  sta SCRATCH
+  lda stackaccess+1
+  sta SCRATCH+1
+
+start
+  lda SCRATCH       ; first, print the current address as a prompt
+  sta stackaccess   
+  lda SCRATCH+1
+  sta stackaccess+1
+  jsr push16        ; put it onto the stack
+  jsr print16hex    ; print it in hex
+  lda #$20          ; output a space
+  jsr puta
+
+  jsr readline      ; read a line of input into the buffer
+  jsr crlf          ; echo newline
+
+  cpy #0            ; is the line blank?
+  beq endinput      ; if so, then end the routine
+  jsr parseinput    ; otherwise, parse the input into byte strings
+
+  ;; write those bytes into memory starting at the address
+  ;; begin a new line with the next address
+  ldy #1
+  inc ARGINDEX      ; change from count to sentinel value
+
+nextbyte
+  cpy ARGINDEX      ; have we done all the arguments?
+  beq donebytes     ; if so, jump to the end of this round
+
+  clc
+  lda #<INPUT       ; load the base address for the input buffer
+  adc ARGINDEX,y    ; and add the offset to the y'th argument
+  sta stackaccess   ; store at stackaccess
+  lda #>INPUT       ; then the upper byte
+  adc #0            ; in case we cross page boundary (but we shouldn't)
+  sta stackaccess+1
+  jsr push16        ; push the address for the byte string
+  jsr read8hex      ; interpret as an eight-bit hex value
+  jsr pop16         ; pull off the stack
+  lda stackaccess   ; this is the byte, in the lower 8 bits
+  phx
+  ldx #0            ; needed  because there's no non-index indirect mode
+  sta (SCRATCH,x)   ; store it at the address pointed to by SCRATCH
+  inc SCRATCH       ; increment SCRATCH (and possibly SCRATCH+1)
+  bne endloop
+  inc SCRATCH+1
+endloop
+  plx               ; restore X before we use the stack routines again
+  iny               ; move on to next entered type
+  jmp nextbyte
+
+donebytes
+  bra start         ; again with the next line
+
+endinput
+  jmp inputreturn
+
+error
+  lda #<inputerrstring
+  sta PRINTVEC
+  lda #>inputerrstring+1
+  sta PRINTVEC+1
+  jsr printvecstr
+  jsr crlf
+inputreturn
+  rts               ; return (x already restored)
+.)
+
+;;;;;;;;;;;;;
+;;;
+;;; Various utility routines
+;;;
+;;;;;;;;;;;;;
+
+;;;
+;;; Ouptut carriage return and line feed
+;;;
+crlf
+  pha
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0d
+  sta ACIA_DATA
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0a
+  sta ACIA_DATA
+  pla
+  rts
+
+
+;;;
+;;; output the character code in the accumulator
+;;;
+puta
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+;;;
+;;; output the value in the accumulator as a hex pattern
+;;; NB x cannot be guaranteed to be stack ptr during this... check...
+;;;
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+
+
+;;; read a line of input from the serial interface
+;;; leaves data in the buffer at INPUT
+;;; y is the number of characters in the line, so it will fail if
+;;; more then 255 characters are entered
+;;; line terminated by carriage return. backspaces processed internally.
+;;;
+readline
+  ldy #0
+readchar
+.(
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  cmp #$08           ; check for backspace
+  beq backspace
+  cmp #$0D           ; check for newline
+  beq done
+  sta INPUT,y        ; track the input
+  iny
+  jsr puta           ; echo the typed character
+  jmp readchar       ; loop to repeat
+backspace
+  cpy #0             ; beginning of line?
+  beq readchar
+  dey                ; if not, go back one character
+  jsr puta           ; move cursor back
+  jmp readchar
+
+  ;; this is where we land if the line input has finished
+  ;;
+done
+  rts
+
+
+;; memory test
+;; the process is, for each page of memory (and MEMTESTBASE points
+;; to the starting point), we write the number of that page into
+;; each byte of that page (ie, each byte on page $1200 gets written
+;; with $12, each byte on page $4600 gets written with $46).
+;; then we read back and report errors. Leave the memory as it
+;; is at the end of the test so that I can poke around with the
+;; monitor later
+;;
+memtestcmd
+  phx               ; preserve the stack, we're going to need x...
+  ;; stage one is the write
+writetest
+  stz MEMTESTBASE
+  lda #$05         ;; we start at page $05
+  sta MEMTESTBASE+1
+
+  ;; for page x, write x into each byte
+.(
+fillpage
+  ldy #$00
+  lda MEMTESTBASE+1 ; load bit pattern
+loop
+  sta (MEMTESTBASE),y
+  iny
+  bne loop
+
+  ;; move onto the next page, as long as we're still in the RAM
+nextpage
+  ;lda BASE+1
+  inc               ; accumulator still holds page numner
+  cmp #$80          ; stop when we hit the upper half of memory
+  beq readtest
+  sta MEMTESTBASE+1
+  bra fillpage
+.)
+
+  ;; stage two. read it back and check.
+readtest
+  ;; start at the beginning again
+  stz MEMTESTBASE
+  lda #$05
+  sta MEMTESTBASE+1
+
+.(
+  ;; each byte should be the same as the page
+nextpage
+  ldy #$00
+loop
+  lda (MEMTESTBASE),y
+  cmp MEMTESTBASE+1
+  bne testerr
+  iny
+  bne loop
+
+  lda MEMTESTBASE+1
+  inc
+  cmp #$80
+  beq exit
+  sta MEMTESTBASE+1
+  bra nextpage
+testerr
+  lda MEMTESTBASE+1
+  jsr putax
+  tya
+  jsr putax
+  jsr memtesterr
+exit
+  plx
+  rts
+.)  
+
+
+;;; rom/ram test
+;;; REMOVE AFTER DEBUGGING
+;; takes a single block of code, which implement a busy-wait, and copies
+;; it from ROM into three different locations in RAM. then ties them
+;; together with JMPs, in sequence. the result should be that the upper
+;; address lines cycle slowly through 0001, 0010, 0100, and 1000, which
+;; i should be able to monitor with LEDs and will indicate that reading
+;; and writing to RAM are both working.
+;;
+;; NOTE this routine never returns. Safe to nuke X and Y, we'll have to
+;; reset to end it.
+
+romramcmd
+  JMP copycode
+
+// delay by counting down X and Y 256^2 times
+//
+delaycode
+  LDX #255
+outer
+  LDY #255
+inner
+  DEY
+  BNE inner
+  DEX
+  BNE outer
+  JMP $1000
+
+copycode        // copy "delaycode" code block from ROM into RAM
+  LDX #11
+copyloop:
+  LDA delaycode,X
+  STA $1000,X
+  STA $2000,X
+  STA $4000,X
+  DEX
+  BNE copyloop
+
+  LDA delaycode // zeroth instruction
+  STA $1000
+  STA $2000
+  STA $4000
+
+  LDA #$00      // store jump instructions addresses. low byte first...
+  STA $100B
+  STA $200B
+  LDA #<delaycode
+  STA $400B
+
+  LDA #$20      // ... then high bytes
+  STA $100C
+  LDA #$40
+  STA $200C
+  LDA #>delaycode
+  STA $400C
+
+  JMP delaycode // starts the whole thing going
+
+
+
+memtesterr
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda memerrstr,y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+  jsr crlf
+.)
+  rts
+
+
+;;; print the string pointed to at PRINTVEC
+;;;
+printvecstr
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda (PRINTVEC),y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+.)
+  rts
+
+
+
+
+
+;;;
+;;; Various string constants
+;;;
+
+hextable:	 .byte "0123456789ABCDEF"
+greeting:	 .byte "6502 Mite SBC simple monitor v08. Hi Paul.", $0d, $0a, $00
+prompt:		 .byte "*"
+helpstring:	 .byte "Commands available: echo, help, about, dump, poke, zero, go, xreceive, input, memtest", $0d, $0a, $00
+nocmderrstr:	 .byte "Command not recognized", $0d, $0a, $00
+implementstring: .byte "Not yet implemented", $0d, $0a, $00
+dumperrstring:   .byte "Usage: dump hexaddress [count:10]", $00
+pokeerrstring:   .byte "Usage: poke hexaddress hexvalue", $00
+goerrstring:	 .byte "Usage: go hexaddress", $00
+zeroerrstring:	 .byte "Usage: zero hexaddress [count:10]", $00
+xrecverrstring:  .byte "Usage: xreceive hexaddress", $00
+inputhelpstring: .byte "Enter two-digit hex bytes. Blank line to end.", $00
+inputerrstring:  .byte "Usage: input hexaddress", $00
+memerrstr:	 .byte "Memory test failed", $00
+char:		 .byte "."

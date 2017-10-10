@@ -15,18 +15,30 @@
 ;;; bottom two bits of instruction byte signal a block of instructions
 ;;; with differnt encoding patterns. so, start there.
 
+  lda (BASE),y
+  and #%00000011
+  beq branch00      ; go to branch for cc=00
+  cmp #%00000010
+  beq branch10      ; go to brnach for cc=10
+  cmp #%00000001
+  bne others        ; go to branch for remaining opcodes
+branch01
 ;;; cc=01?
+  lda (BASE),y      ; reload instruction
+  and #%11100000    ; grab top three bits
+  lsr               ; shift right for times
+  lsr
+  lsr               ; result is the aaa code * 2
+  lsr               ; the better to use as an index into opcode table
+  tax
+  ; so now cc01table,x is the pointer to the right string
 
-;;; look up opcode
-; grab top three bits of the address
-; shift left four times (ie get bit pattern*2)
-; use this to index cc01 table
-; read out address of opcode string
+
 
 ;;; handle each addressing mode
 
 ;;; cc=10?
-
+branch10
 ;;; look up opcode
 
 ;;; handle each addressing mode
@@ -34,12 +46,15 @@
 ;;; special cases for STX and LDX
 
 ;; cc = 00?
+branch00
 
 ;;; look up opcode
 
 ;;; handle each addressing mode (NOTE same as cc=10)
 
+
 ;;; branch instructions -- actually, these don't follow pattern so do FIRST
+others
 
 ;;; remaining special cases?
 
@@ -80,3 +95,18 @@ STYstr .byte "STY"
 LDYstr .byte "LDY"
 CPYstr .byte "CPY"
 CPXstr .byte "CPX"
+
+
+;;; this code makes no sense; it's here purely for test purposes
+;;; as a disassembler target
+testcode
+  ldx #0
+  lda #$66
+  sta ($04),x
+  bne next
+  inx
+next
+  ora $4044
+  cmp #ff
+  adc ($77,y)
+  rts
