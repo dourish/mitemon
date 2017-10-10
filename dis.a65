@@ -15,6 +15,9 @@
 ;;; bottom two bits of instruction byte signal a block of instructions
 ;;; with differnt encoding patterns. so, start there.
 
+start
+  phx
+
   lda (BASE),y
   and #%00000011
   beq branch00      ; go to branch for cc=00
@@ -34,9 +37,54 @@ branch01
   ; so now cc01table,x is the pointer to the right string
 
 
+  
 
-;;; handle each addressing mode
+  ;;; handle each addressing mode
+  ;;; the addressing mode is going to determine how many
+  ;;; bytes we need to consume overall
+  lda (BASE),y
+  and #%00011100
+  beq indzpx
+  cmp #%00000100
+  beq zp
+  cmp #%00001000
+  beq imm
+  cmp #%00001100
+  beq abs
+  cmp #%00010000
+  beq izpy
+  cmp #%00010100
+  beq absy
+absx
+  ;; absolute, X -- consumes two more bytes
+  lda #$20
+  jsr puta
+  iny
+  iny
+  lda (BASE),y
+  jsr putax
+  dey
+  lda (BASE),y
+  jsr putax
+  iny
+  jmp endline
+izpx
+  ;; (zero page,X) -- consumes one more byte
+zp
+  ;; zero page -- consumes one more byte
+imm
+  ;; immediate -- consumes one more byte
+abs
+  ;; absolute -- consumes two more bytes
+izpy
+  ;; (zero page),Y -- consumes one more byte
+zpx
+  ;; zero page,X -- consumes one more byte
+absy
+  ;; absolute,Y -- consumes two more bytes
 
+
+  ;;
 ;;; cc=10?
 branch10
 ;;; look up opcode
@@ -55,7 +103,8 @@ branch00
 
 ;;; branch instructions -- actually, these don't follow pattern so do FIRST
 others
-
+;;; branches have the form xxy10000
+;;; xxy*2 should index into branchtable
 ;;; remaining special cases?
 
 
@@ -71,6 +120,8 @@ cc10table
 cc00table
   .word NONstr, BITstr, JMPstr, JMPstr, STYstr, LDYstr, CPYstr, CPXstr
 
+branchtable
+  .word BPLstr, BMIstr, BVCstr, BVSstr, BCCstr, BCSstr, BNEstr, BEQstr
 
 ORAstr .byte "ORA"
 ANDstr .byte "AND"
@@ -95,6 +146,14 @@ STYstr .byte "STY"
 LDYstr .byte "LDY"
 CPYstr .byte "CPY"
 CPXstr .byte "CPX"
+BPLstr .byte "BPL"
+BMIstr .byte "BMI"
+BVCstr .byte "BVC"
+BVSstr .byte "BVS"
+BCCstr .byte "BCC"
+BCSstr .byte "BCS"
+BNEstr .byte "BNE"
+BEQstr .byte "BEQ"
 
 
 ;;; this code makes no sense; it's here purely for test purposes
