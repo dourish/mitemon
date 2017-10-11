@@ -2,10 +2,10 @@ XA=xa
 MKHEX=mkhex
 MKROM=mkrom
 
-%.o65: %.a65
+%.x65: %.a65
 	$(XA) -o $@ $<
 
-%.hex: %.o65
+%.hex: %.x65
 	$(MKHEX) $< > $@
 
 %.rom: %.hex
@@ -15,12 +15,4 @@ MKROM=mkrom
 	split -b 16384 $< `basename $< .rom`".x"
 
 
-mon1.a65: decl.a65 init.a65
 
-mon2.a65: decl.a65 init.a65
-
-mon3.a65: decl.a65 init.a65
-
-mon4.a65: decl.a65 init.a65
-
-mon5.a65: decl.a65 init.a65 stack.a65

@@ -1,54 +1,81 @@
 
 ;;; 65C02 disassembler
+;;;
 ;;; to be incorporated into the monitor eventually, but for now
 ;;; written as a separate program.
 ;;;
 ;;; paul dourish, october 2017
 ;;;
 
+#include "decl.a65"
 
 ;;;
 ;;; i'm following details and logic from
 ;;; http://www.llx.com/~nparker/a2/opcodes.html
 ;;;
+;;; most instructions are of the form aaabbbcc, where cc signals
+;;; a block of instructons that operate in a similar way, with aaa
+;;; indicating the instructoon and bbb indicating the addressing mode.
+;;;
 
-;;; bottom two bits of instruction byte signal a block of instructions
-;;; with differnt encoding patterns. so, start there.
+SCRATCH=$0010       ; through $001F
+BASE=$0050          ; and $0051
+
+setup
+  phx               ; preserve X (it's a stack pointer elsewhere)
+  lda #<testcode    ; load testcode as our BASE for disassembly
+  sta BASE
+  lda #>testcode
+  sta BASE+1
+  ldy #0            ; y will track bytes as we go
 
 start
-  phx
-
-  lda (BASE),y
-  and #%00000011
+  lda (BASE),y      ; get the instruction
+  and #%00000011    ; look at the "cc" bits -- what sort of opcode?
   beq branch00      ; go to branch for cc=00
   cmp #%00000010
-  beq branch10      ; go to brnach for cc=10
+  beq branch10      ; go to branch for cc=10
   cmp #%00000001
   bne others        ; go to branch for remaining opcodes
+
+;;; interpret according to the pattern for cc=01
+;;;
 branch01
-;;; cc=01?
   lda (BASE),y      ; reload instruction
   and #%11100000    ; grab top three bits
   lsr               ; shift right for times
   lsr
-  lsr               ; result is the aaa code * 2
-  lsr               ; the better to use as an index into opcode table
+  lsr               ; result is the aaa code * 2, ...
+  lsr               ; ... the better to use as index into opcode table
   tax
   ; so now cc01table,x is the pointer to the right string
-
-
+  lda cc01table,x
+  sta SCRATCH
+  lda cc01table+1,x
+  sta SCRATCH+1
+  ; print the three characters pointed to there
+  ldx #0
+  lda (SCRATCH),x   ; first character...
+  jsr puta          ; print it
+  inx
+  lda (SCRATCH),x   ; second character...
+  jsr puta          ; print it
+  inx
+  lda (SCRATCH),x   ; third character...
+  jsr puta          ; print it
+  lda #$20          ; print a space
+  jsr puta
   
-
   ;;; handle each addressing mode
   ;;; the addressing mode is going to determine how many
   ;;; bytes we need to consume overall
-  lda (BASE),y
-  and #%00011100
-  beq indzpx
+  lda (BASE),y      ; get the instruction again
+  and #%00011100    ; extract the bbb bits -- addressing mode
+  beq indzpx        ; indirect zero page,x
   cmp #%00000100
-  beq zp
+  beq zp            ; zero page
   cmp #%00001000
-  beq imm
+  beq imm           ; immediate
   cmp #%00001100
   beq abs
   cmp #%00010000
@@ -57,18 +84,21 @@ branch01
   beq absy
 absx
   ;; absolute, X -- consumes two more bytes
-  lda #$20
+  iny               ; get the second (most-sig) byte first
+  iny
+  lda (BASE),y
+  jsr putax
+  dey               ; then the less-significant byte
+  lda (BASE),y
+  jsr putax
+  iny
+  lda #',
   jsr puta
-  iny
-  iny
-  lda (BASE),y
-  jsr putax
-  dey
-  lda (BASE),y
-  jsr putax
-  iny
+  lda #'X
+  jsr puta
+  iny               ; leave Y pointing to last byte consumed
   jmp endline
-izpx
+indzpx
   ;; (zero page,X) -- consumes one more byte
 zp
   ;; zero page -- consumes one more byte
@@ -107,7 +137,9 @@ others
 ;;; xxy*2 should index into branchtable
 ;;; remaining special cases?
 
-
+endline
+  jsr crlf
+  rts
 
 
 
@@ -156,9 +188,84 @@ BNEstr .byte "BNE"
 BEQstr .byte "BEQ"
 
 
+puta
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+;;;
+;;; output the value in the accumulator as a hex pattern
+;;; NB x cannot be guaranteed to be stack ptr during this... check...
+;;;
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+
+crlf
+  pha
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0d
+  sta ACIA_DATA
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0a
+  sta ACIA_DATA
+  pla
+  rts
+
+hextable:        .byte "0123456789ABCDEF"
+
+
 ;;; this code makes no sense; it's here purely for test purposes
 ;;; as a disassembler target
 testcode
+  lda 1234,x  
   ldx #0
   lda #$66
   sta ($04),x
@@ -166,6 +273,6 @@ testcode
   inx
 next
   ora $4044
-  cmp #ff
+  cmp #$ff
   adc ($77,y)
   rts
