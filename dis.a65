@@ -7,6 +7,8 @@
 ;;; paul dourish, october 2017
 ;;;
 
+* = $0300
+
 #include "decl.a65"
 
 ;;;
@@ -30,13 +32,22 @@ setup
   ldy #0            ; y will track bytes as we go
 
 start
+nextinst
   lda (BASE),y      ; get the instruction
   and #%00000011    ; look at the "cc" bits -- what sort of opcode?
-  beq branch00      ; go to branch for cc=00
+  beq jbranch00     ; go to branch for cc=00
   cmp #%00000010
-  beq branch10      ; go to branch for cc=10
+  beq jbranch10     ; go to branch for cc=10
   cmp #%00000001
-  bne others        ; go to branch for remaining opcodes
+  bne jothers       ; go to branch for remaining opcodes
+  jmp branch01
+
+jbranch00
+  jmp branch00
+jbranch10
+  jmp branch10
+jothers
+  jmp others
 
 ;;; interpret according to the pattern for cc=01
 ;;;
@@ -48,42 +59,66 @@ branch01
   lsr               ; result is the aaa code * 2, ...
   lsr               ; ... the better to use as index into opcode table
   tax
-  ; so now cc01table,x is the pointer to the right string
-  lda cc01table,x
+  ; so now cc01optable,x is the pointer to the right string
+  lda cc01optable,x
   sta SCRATCH
-  lda cc01table+1,x
+  lda cc01optable+1,x
   sta SCRATCH+1
+  phy
   ; print the three characters pointed to there
-  ldx #0
-  lda (SCRATCH),x   ; first character...
+  ldy #0
+  lda (SCRATCH),y   ; first character...
   jsr puta          ; print it
-  inx
-  lda (SCRATCH),x   ; second character...
+  iny
+  lda (SCRATCH),y   ; second character...
   jsr puta          ; print it
-  inx
-  lda (SCRATCH),x   ; third character...
+  iny
+  lda (SCRATCH),y   ; third character...
   jsr puta          ; print it
   lda #$20          ; print a space
   jsr puta
+  ply
   
   ;;; handle each addressing mode
   ;;; the addressing mode is going to determine how many
   ;;; bytes we need to consume overall
+  ;;; so we do something similar... grab the bits, shift them down
+  ;;; and use that to look up a table which will tell us where
+  ;;; to jump to to interpret it correctly.
+  
   lda (BASE),y      ; get the instruction again
   and #%00011100    ; extract the bbb bits -- addressing mode
-  beq indzpx        ; indirect zero page,x
-  cmp #%00000100
-  beq zp            ; zero page
-  cmp #%00001000
-  beq imm           ; immediate
-  cmp #%00001100
-  beq abs
-  cmp #%00010000
-  beq izpy
-  cmp #%00010100
-  beq absy
+  lsr               ; shift just once
+  ;; acc now holds the offset of the right entry in the table
+  ;; now add in the base address of the table, and store it in SCRATCH
+  clc
+  adc #<cc01adtable
+  sta SCRATCH       ; less significant byte
+  lda #>cc01optable
+  adc #0
+  sta SCRATCH+1     ; most significant byte
+  ;; one more level of indirection -- fetch the address listed there
+  phy
+  ldy #0
+  lda (SCRATCH),y
+  sta SCRATCH+2
+  iny
+  lda (SCRATCH),y
+  sta SCRATCH+3
+  ply
+  jmp (SCRATCH+2)   ; jump to address specified in table
+  
+
+
+acc
+  ;; accumulator
+  lda #'A
+  jsr puta
+  jmp endline
 absx
   ;; absolute, X -- consumes two more bytes
+  lda #'$
+  jsr puta
   iny               ; get the second (most-sig) byte first
   iny
   lda (BASE),y
@@ -98,21 +133,113 @@ absx
   jsr puta
   iny               ; leave Y pointing to last byte consumed
   jmp endline
-indzpx
+izpx
   ;; (zero page,X) -- consumes one more byte
+  iny
+  lda #'(
+  jsr puta
+  lda #'$
+  jsr puta
+  lda #'0
+  jsr puta
+  jsr puta
+  lda (BASE),y
+  jsr putax
+  lda #',
+  jsr puta
+  lda #'X
+  jsr puta
+  lda #')
+  jsr puta
+  jmp endline
 zp
   ;; zero page -- consumes one more byte
+  iny
+  lda #'$
+  jsr puta
+  lda #'0
+  jsr puta
+  jsr puta
+  lda (BASE),y
+  jsr putax
+  jmp endline
 imm
   ;; immediate -- consumes one more byte
+  iny
+  lda #'#
+  jsr puta
+  lda #'$
+  jsr puta
+  lda (BASE),y
+  jsr putax
+  jmp endline
 abs
   ;; absolute -- consumes two more bytes
+  lda #'$
+  jsr puta
+  iny               ; get the second (most-sig) byte first
+  iny
+  lda (BASE),y
+  jsr putax
+  dey               ; then the less-significant byte
+  lda (BASE),y
+  jsr putax
+  iny
+  jmp endline
 izpy
   ;; (zero page),Y -- consumes one more byte
+  iny
+  lda #'(
+  jsr puta
+  lda #'$
+  jsr puta
+  lda #'0
+  jsr puta
+  jsr puta
+  lda (BASE),y
+  jsr putax
+  lda #')
+  jsr puta
+  lda #',
+  jsr puta
+  lda #'Y
+  jsr puta
+  jmp endline
 zpx
   ;; zero page,X -- consumes one more byte
+  iny
+  lda #'$
+  jsr puta
+  lda #'0
+  jsr puta
+  jsr puta
+  lda (BASE),y
+  jsr putax
+  jmp endline
 absy
   ;; absolute,Y -- consumes two more bytes
-
+  lda #'$
+  jsr puta
+  iny               ; get the second (most-sig) byte first
+  iny
+  lda (BASE),y
+  jsr putax
+  dey               ; then the less-significant byte
+  lda (BASE),y
+  jsr putax
+  iny
+  lda #',
+  jsr puta
+  lda #'Y
+  jsr puta
+  jmp endline
+err
+  ;; can't interpret the opcode
+  lda #'?
+  jsr puta
+  jsr puta
+  jsr puta
+  jmp endline
 
   ;;
 ;;; cc=10?
@@ -139,20 +266,39 @@ others
 
 endline
   jsr crlf
+
+  clc
+  tya               ; move Y to ACC and add to BASE address
+  adc BASE
+  sta BASE          ; low byte
+  lda BASE+1
+  adc #0
+  sta BASE+1        ; high byte
+  ldy #0            ; reset Y
+
+  ;; test if we should terminate... goes here...
+
+  jmp nextinst
+finish
   rts
 
 
 
-cc01table
+cc01optable
   .word ORAstr, ANDstr, EORstr, ADCstr, STAstr, LDAstr, CMPstr, SBCstr
+cc01adtable
+  .word izpx, zp, imm, abs, izpy, zpx, absy, absx
 
-cc10table
+cc10optable
   .word ASLstr, ROLstr, LSRstr, RORstr, STXstr, LDXstr, DECstr, INCstr
+cc10adtable
+  .word imm, zp, acc, abs, err, zpx, err, absx
 
-cc00table
+cc00optable
+  ;; yes, JMP appears here twice... it's not a mistake...
   .word NONstr, BITstr, JMPstr, JMPstr, STYstr, LDYstr, CPYstr, CPXstr
 
-branchtable
+branchoptable
   .word BPLstr, BMIstr, BVCstr, BVSstr, BCCstr, BCSstr, BNEstr, BEQstr
 
 ORAstr .byte "ORA"
@@ -264,15 +410,17 @@ hextable:        .byte "0123456789ABCDEF"
 
 ;;; this code makes no sense; it's here purely for test purposes
 ;;; as a disassembler target
+;;; at first, let's have a bunch of instructions from the cc01 table.
 testcode
-  lda 1234,x  
-  ldx #0
-  lda #$66
-  sta ($04),x
-  bne next
-  inx
-next
-  ora $4044
-  cmp #$ff
-  adc ($77,y)
+  lda $1234,x  
+  and #$0f
+  cmp #$66
+  adc $5555,y
+  sta ($04,x)
+;  bne next
+;  inx
+;next
+;  ora $4044
+;  cmp #$ff
+;  adc ($77),y
   rts
