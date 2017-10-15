@@ -48,6 +48,8 @@ nextinst
 
   lda (BASE),y      ; get the instruction to decode
   beq jdobrk        ; special case for BRK
+  cmp #$20
+  beq jdojsr        ; special case for JSR
   cmp #$40
   beq jdorti        ; special case for RTI
   cmp #$60
@@ -56,6 +58,11 @@ nextinst
   and #%00011111    ; checking if it's a branch
   cmp #%00010000
   beq jbranch       ; jump to code for branches
+
+  lda (BASE),y      ; get the instruction again (last test was destructive)
+  and #%00001111
+  cmp #$08          ; single-byte instructions with 8 in lower nybble
+  beq jsingle8
 
   lda (BASE),y      ; get the instruction again (last test was destructive)
   and #%00000011    ; look at the "cc" bits -- what sort of opcode?
@@ -74,10 +81,14 @@ jbranch
   jmp branch
 jdobrk
   jmp dobrk
+jdojsr
+  jmp dojsr
 jdorti
   jmp dorti
 jdorts
   jmp dorts
+jsingle8
+  jmp single8
 jothers
   jmp others
 
@@ -426,10 +437,10 @@ branch
   lsr
   lsr
   lsr
+  tax
 
   ;; now index into table
   ; so now branchoptable,x is the pointer to the right string
-  tax
   lda branchoptable,x
   sta SCRATCH
   lda branchoptable+1,x
@@ -453,10 +464,41 @@ branch
   ;; for branch instructions
   jmp immb
 
+;;; these are the single-byte instructions with 8 in their lower nybble
+;;; again, code borrowed from above (branch) -- TODO -- refactor.
+single8
+  lda (BASE),y
+  and #%11110000
+  lsr
+  lsr
+  lsr
+  tax
+
+  ;; now index into table
+  ;; so now single08table,x is the pointer to the right string
+  lda single08table,x
+  sta SCRATCH
+  lda single08table+1,x
+  sta SCRATCH+1
+  phy
+  ; print the three characters pointed to there
+  ldy #0
+  lda (SCRATCH),y   ; first character...
+  jsr puta          ; print it
+  iny
+  lda (SCRATCH),y   ; second character...
+  jsr puta          ; print it
+  iny
+  lda (SCRATCH),y   ; third character...
+  jsr puta          ; print it
+  lda #$20          ; print a space
+  jsr puta
+  ply
+  jmp endline
+
 others
   lda #'X
   jsr puta
-  jsr crlf
   jmp endline
 
 ;; special cases go here
@@ -469,6 +511,17 @@ dobrk
   lda #'K
   jsr puta
   jmp endline
+
+dojsr
+  lda #'J
+  jsr puta
+  lda #'S
+  jsr puta
+  lda #'R
+  jsr puta
+  lda #$20
+  jsr puta
+  jmp abs
 
 dorti
   lda #'R
@@ -534,6 +587,14 @@ cc00adtable
 branchoptable
   .word BPLstr, BMIstr, BVCstr, BVSstr, BCCstr, BCSstr, BNEstr, BEQstr
 
+single08table
+  .word PHPstr, CLCstr, PLPstr, SECstr, PHAstr, CLIstr, PLAstr, SEIstr
+  .word DEYstr, TYAstr, TAYstr, CLVstr, INYstr, CLDstr, INXstr, SEDstr
+
+singlexatable
+  .word TXAstr, TXSstr, TAXstr, TSXstr, DEXstr, errstr, NOPstr
+
+
 ORAstr .byte "ORA"
 ANDstr .byte "AND"
 EORstr .byte "EOR"
@@ -566,6 +627,32 @@ BCSstr .byte "BCS"
 BNEstr .byte "BNE"
 BEQstr .byte "BEQ"
 
+PHPstr .byte "PHP"
+CLCstr .byte "CLC"
+PLPstr .byte "PLP"
+SECstr .byte "SEC"
+PHAstr .byte "PHA"
+CLIstr .byte "CLI"
+PLAstr .byte "PLA"
+SEIstr .byte "SEI"
+DEYstr .byte "DEY"
+TYAstr .byte "TYA"
+TAYstr .byte "TAY"
+CLVstr .byte "CLV"
+INYstr .byte "INY"
+CLDstr .byte "CLD"
+INXstr .byte "INX"
+SEDstr .byte "SED"
+
+TXAstr .byte "TXA"
+TXSstr .byte "TXS"
+TAXstr .byte "TAX"
+TSXstr .byte "TSX"
+DEXstr .byte "DEX"
+NOPstr .byte "NOP"
+
+
+errstr .byte "???"
 
 puta
 .(
@@ -683,8 +770,20 @@ addr
 ; testing branches
   bne addr
   bvc addr
-  bne addr
+  bpl addr
   beq addr
+
+; testing single-byte instructions
+  php
+  dey
+  inx
+  clc
+  cld
+  pla
+
+; test JSR and indirect jmp
+  jsr $1234
+  jmp ($5678)  ;; THIS IS NOT WORKING
 
 ; testing special cases
   rts
