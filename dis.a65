@@ -222,8 +222,22 @@ zp
   jsr putax
   jmp endline
 
-imm
-  ;; immediate -- consumes one more byte
+izp                 ; indirect zero page, only on 65C02, consumes 1 byte
+  iny
+  lda #'(
+  jsr puta
+  lda #'$
+  jsr puta
+  lda #'0
+  jsr puta
+  jsr puta
+  lda (BASE),y
+  jsr putax
+  lda #')
+  jsr puta
+  jmp endline
+
+imm                 ; immediate mode, consumes one byte
   iny
   lda #'#
   jsr puta
@@ -233,8 +247,7 @@ imm
   jsr putax
   jmp endline
 
-immb
-  ;; like immediate, but for branches (so ditch the "#")
+immb                ; like immediate, but for branches (so ditch the "#")
   iny
   lda #'$
   jsr puta
@@ -363,7 +376,10 @@ err
 ;;;
 branch10
 
-  ;; look up and process opcode first
+  ;; first, take care of the unusual case of the 65C02 instructions
+  ;; which use a different logic
+
+  ;; look up and process opcode
   ;;
   lda (BASE),y      ; reload instruction
   and #%11100000    ; grab top three bits
@@ -372,11 +388,28 @@ branch10
   lsr               ; result is the aaa code * 2, ...
   lsr               ; ... the better to use as index into opcode table
   tax
+
+  ;; before we proceed, decide which table to look up. the 65C02 codes
+  ;; in the range bbb=100 use a differnt logic
+  lda (BASE),y
+  and #%00011100
+  cmp #%00010000
+  beq specialb10
+
   ; so now cc10optable,x is the pointer to the right string
   lda cc10optable,x
   sta SCRATCH
   lda cc10optable+1,x
   sta SCRATCH+1
+  jmp b10opcode
+
+specialb10
+  lda cc01optable,x ; not an error... we're using the cc01 table for 65c02
+  sta SCRATCH
+  lda cc01optable+1,x
+  sta SCRATCH+1
+
+b10opcode
   phy
   ; print the three characters pointed to there
   ldy #0
@@ -678,7 +711,7 @@ cc01adtable
 cc10optable
   .word ASLstr, ROLstr, LSRstr, RORstr, STXstr, LDXstr, DECstr, INCstr
 cc10adtable
-  .word imm, zp, acc, abs, err, zpx, err, absx
+  .word imm, zp, acc, abs, izp, zpx, err, absx
 
 cc00optable
   ;; yes, JMP appears here twice... it's not a mistake...
@@ -898,6 +931,10 @@ addr
 ; test JSR and indirect jmp
   jsr $1234
   jmp ($5678)
+
+; some 65C02 instructions
+  ora ($00AB)
+  lda ($00CD)
 
 ; testing special cases (plus padding)
   rts
