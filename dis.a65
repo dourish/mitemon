@@ -58,20 +58,26 @@ nextinst
   jsr puta
   jsr puta
 
-  ;; now load the instruction and start attempting to decode it,
-  ;; beginning with a few special cases.
-  ;;
-  lda (BASE),y      ; get the instruction to decode
-  beq jdobrk        ; special case for BRK
-  cmp #$20
-  beq jdojsr        ; special case for JSR
-  cmp #$40
-  beq jdorti        ; special case for RTI
-  cmp #$60
-  beq jdorts        ; special case for RTS
-  cmp #$80
-  beq jdobra        ; special case for BRA
-
+  ;; before we handle the regular cases, check the table
+  ;; of special cases which are harder to detect via regular
+  ;; patterns
+  ldx #0
+nextspecial
+  lda specialcasetable,x
+  cmp #$FF
+  beq endspecial
+  cmp (BASE),y
+  beq foundspecial
+  inx
+  inx
+  inx
+  bra nextspecial
+foundspecial
+  inx
+  jmp (specialcasetable,x)
+endspecial
+  lda (BASE),y
+  
   and #%00011111    ; checking if it's a branch
   cmp #%00010000
   beq jbranch       ; jump to code for branches
@@ -738,6 +744,134 @@ dobra
   jsr puta
   jmp immb
 
+dotrbzp
+  lda #'T
+  jsr puta
+  lda #'R
+  jsr puta
+  lda #'B
+  jsr puta
+  lda #$20
+  jsr puta
+  jmp zp
+
+dotrbabs
+  lda #'T
+  jsr puta
+  lda #'R
+  jsr puta
+  lda #'B
+  jsr puta
+  lda #$20
+  jsr puta
+  jmp abs
+
+dostzzp
+  lda #'S
+  jsr puta
+  lda #'T
+  jsr puta
+  lda #'Z
+  jsr puta
+  lda #$20
+  jsr puta
+  jmp zp
+
+dostzabs
+  lda #'S
+  jsr puta
+  lda #'T
+  jsr puta
+  lda #'Z
+  jsr puta
+  lda #$20
+  jsr puta
+  jmp abs
+
+dostzzpx
+  lda #'S
+  jsr puta
+  lda #'T
+  jsr puta
+  lda #'Z
+  jsr puta
+  lda #$20
+  jsr puta
+  jmp zpx
+
+dostzabsx
+  lda #'S
+  jsr puta
+  lda #'T
+  jsr puta
+  lda #'Z
+  jsr puta
+  lda #$20
+  jsr puta
+  jmp absx
+
+doplx
+  lda #'P
+  jsr puta
+  lda #'L
+  jsr puta
+  lda #'X
+  jsr puta
+  jmp endline
+
+dophx
+  lda #'P
+  jsr puta
+  lda #'H
+  jsr puta
+  lda #'X
+  jsr puta
+  jmp endline
+
+doply
+  lda #'P
+  jsr puta
+  lda #'L
+  jsr puta
+  lda #'Y
+  jsr puta
+  jmp endline
+
+dophy
+  lda #'P
+  jsr puta
+  lda #'H
+  jsr puta
+  lda #'Y
+  jsr puta
+  jmp endline
+
+doinca
+  lda #'I
+  jsr puta
+  lda #'N
+  jsr puta
+  lda #'C
+  jsr puta
+  lda #$20
+  jsr puta
+  lda #'A
+  jsr puta
+  jmp endline
+
+dodeca
+  lda #'I
+  jsr puta
+  lda #'N
+  jsr puta
+  lda #'C
+  jsr puta
+  lda #$20
+  jsr puta
+  lda #'A
+  jsr puta
+  jmp endline
+
 
 endline
   jsr crlf
@@ -790,6 +924,44 @@ single08table
 
 singlexatable
   .word TXAstr, TXSstr, TAXstr, TSXstr, DEXstr, PHXstr, NOPstr, PLXstr
+
+specialcasetable
+  .byte $00
+  .word dobrk
+  .byte $20
+  .word dojsr
+  .byte $40
+  .word dorti
+  .byte $60
+  .word dorts
+  .byte $80
+  .word dobra
+  .byte $14
+  .word dotrbzp
+  .byte $1C
+  .word dotrbabs
+  .byte $64
+  .word dostzzp
+  .byte $9C
+  .word dostzabs
+  .byte $74
+  .word dostzzpx
+  .byte $9E
+  .word dostzabsx
+  .byte $1A
+  .word doinca
+  .byte $3A
+  .word dodeca
+  .byte $5A
+  .word dophy
+  .byte $7A
+  .word doply
+  .byte $DA
+  .word dophx
+  .byte $FA
+  .word doplx
+  .byte $FF
+  .word $FFFF
 
 
 ORAstr .byte "ORA"
@@ -966,29 +1138,29 @@ testcode
 
 ; testing cc=00
   sty $1234
-  sty $56
+;  sty $56
   jmp $789a
-  cpy #$bc
+;  cpy #$bc
   cpx $def0
 
 addr
 ; testing branches
   bne addr
-  bvc addr
-  bpl addr
+;  bvc addr
+;  bpl addr
   beq addr
 
 ; testing single-byte instructions
   php
-  dey
-  inx
-  clc
+;  dey
+;  inx
+;  clc
   cld
   pla
 
 ; second block
   tax
-  dex
+;  dex
   phx               ; first 65C02 instruction!
 
 ; test JSR and indirect jmp
@@ -999,12 +1171,18 @@ addr
   ora ($00AB)
   lda ($00CD)
   jmp ($1234,X)
-  tsb $56
+;  tsb $56
   tsb $789a
   bit #$bc
-  bit $00de,x
+;  bit $00de,x
   bit $f012,x
   bra addr
+  stz $3456,x
+  trb $78
+  phx
+  plx
+  phy
+  ply
 
 ; testing special cases (plus padding)
   rts
