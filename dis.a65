@@ -1,10 +1,15 @@
 
 ;;; 65C02 disassembler
 ;;;
-;;; to be incorporated into the monitor eventually, but for now
-;;; written as a separate program.
+;;; This will be incorporated into my monitor eventually, but for now
+;;; is written as a separate program.
 ;;;
-;;; paul dourish, october 2017
+;;; Handles all original 6502 opcodes and (almost) all of the 65C02
+;;; opcodes. It may occasionally interpret things overly generously,
+;;; ie take a nonsense byte and give it a meaning... but such a byte
+;;; shouldn't be in a program anyway, right?
+;;;
+;;; Paul Dourish, October 2017
 ;;;
 
 * = $0300
@@ -12,14 +17,20 @@
 #include "decl.a65"
 
 ;;;
-;;; i'm following details and logic from
+;;; I'm following details and logic from
 ;;; http://www.llx.com/~nparker/a2/opcodes.html
 ;;;
-;;; most instructions are of the form aaabbbcc, where cc signals
+;;; Most instructions are of the form aaabbbcc, where cc signals
 ;;; a block of instructons that operate in a similar way, with aaa
 ;;; indicating the instructoon and bbb indicating the addressing mode.
+;;; Each of those blocks is handled by two tables, one of which
+;;; indicates the opcode strings and one of which handles the
+;;; addressing modes (by storing entry points into the processing
+;;; routines).
 ;;;
 
+;;; Working variables
+;;;
 SCRATCH=$0010       ; through $001F
 BASE=$0050          ; and $0051
 COUNT=$0060         ; stores no of instructions to decode (tuned to testcode)
@@ -30,7 +41,7 @@ setup
   sta BASE
   lda #>testcode
   sta BASE+1
-  lda #$30          ; number of instructions to decode
+  lda #$36          ; number of instructions to decode
   sta COUNT
   ldy #0            ; y will track bytes as we go
 
@@ -47,6 +58,9 @@ nextinst
   jsr puta
   jsr puta
 
+  ;; now load the instruction and start attempting to decode it,
+  ;; beginning with a few special cases.
+  ;;
   lda (BASE),y      ; get the instruction to decode
   beq jdobrk        ; special case for BRK
   cmp #$20
@@ -55,6 +69,8 @@ nextinst
   beq jdorti        ; special case for RTI
   cmp #$60
   beq jdorts        ; special case for RTS
+  cmp #$80
+  beq jdobra        ; special case for BRA
 
   and #%00011111    ; checking if it's a branch
   cmp #%00010000
@@ -98,6 +114,8 @@ jdorti
   jmp dorti
 jdorts
   jmp dorts
+jdobra
+  jmp dobra
 jsingle8
   jmp single8
 jsinglexa
@@ -165,6 +183,12 @@ branch01
   jmp (SCRATCH+2)   ; jump to address specified in table
   
 
+;;;
+;;; Routines to handle the output for different addressing modes.
+;;; Each addressing mode has its own entry point; entries in the
+;;; addressing tables for each instruction block point here directly.
+;;; On entry and exit, Y indicates the last byte processed.
+;;;
 
 acc
   ;; accumulator
@@ -172,8 +196,7 @@ acc
   jsr puta
   jmp endline
 
-absx
-  ;; absolute, X -- consumes two more bytes
+absx                ; absolute, X -- consumes two more bytes
   lda #'$
   jsr puta
   iny               ; get the second (most-sig) byte first
@@ -190,8 +213,7 @@ absx
   jsr puta
   jmp endline
 
-izpx
-  ;; (zero page,X) -- consumes one more byte
+izpx                ; (zero page,X), consumes one more byte
   iny
   lda #'(
   jsr puta
@@ -210,8 +232,7 @@ izpx
   jsr puta
   jmp endline
 
-zp
-  ;; zero page -- consumes one more byte
+zp                  ; zero page, consumes one more byte
   iny
   lda #'$
   jsr puta
@@ -307,6 +328,27 @@ ind
   iny
   jmp endline
 
+indx                ; only the JMP on 65C02?
+  iny
+  iny
+  lda #'(
+  jsr puta
+  lda #'$
+  jsr puta
+  lda (BASE),y
+  jsr putax
+  dey
+  lda (BASE),y
+  jsr putax
+  lda #',
+  jsr puta
+  lda #'X
+  jsr puta
+  lda #')
+  jsr puta
+  iny
+  jmp endline
+
 zpx
   ;; zero page,X -- consumes one more byte
   iny
@@ -363,10 +405,7 @@ err
   jsr puta
   jsr puta
   jsr puta
-;  jmp endline
-  rts ; TEMPORARY!!!!
-
-  ;;
+  jmp endline
 
 ;;; the next major block of addresses is those where the two
 ;;; bottom bits are 10. Processing is very similar to those
@@ -498,8 +537,12 @@ branch00
   ;; handle each addressing mode
   ;;
   lda (BASE),y      ; get the instruction again
-  cmp #$6C
-  beq specialindjmp ; indirect JMP is a special case, handle separately
+  cmp #$89          ; special case for BIT #
+  beq specialbit
+  cmp #$6C          ; indirect JMP is a special case, handle separately
+  beq specialindjmp 
+  cmp #$7C          ; similarly for indirect JMP,X
+  beq specialindxjmp  
   and #%00011100    ; extract the bbb bits -- addressing mode
   lsr               ; shift just once
   ;; acc now holds the offset of the right entry in the table
@@ -521,9 +564,17 @@ branch00
   ply
   jmp (SCRATCH+2)   ; jump to address specified in table
 
+specialbit
+  ;; treat this specially -- 65C02 opcode slightly out of place
+  jmp imm
+
 specialindjmp
   ;; treat JMP (address) specially
   jmp ind
+
+specialindxjmp
+  ;; treat JMP (address,X) specially
+  jmp indx
 
 
 ;;; branch instructions -- actually, these don't follow pattern so do FIRST
@@ -676,6 +727,17 @@ dorts
   jsr puta
   jmp endline
 
+dobra
+  lda #'B
+  jsr puta
+  lda #'R
+  jsr puta
+  lda #'A
+  jsr puta
+  lda #$20
+  jsr puta
+  jmp immb
+
 
 endline
   jsr crlf
@@ -715,7 +777,7 @@ cc10adtable
 
 cc00optable
   ;; yes, JMP appears here twice... it's not a mistake...
-  .word NONstr, BITstr, JMPstr, JMPstr, STYstr, LDYstr, CPYstr, CPXstr
+  .word TSBstr, BITstr, JMPstr, JMPstr, STYstr, LDYstr, CPYstr, CPXstr
 cc00adtable
   .word imm, zp, err, abs, err, zpx, err, absx
 
@@ -788,6 +850,7 @@ NOPstr .byte "NOP"
 
 PLXstr .byte "PLA"
 PHXstr .byte "PHX"
+TSBstr .byte "TSB"
 
 errstr .byte "???"
 
@@ -935,6 +998,13 @@ addr
 ; some 65C02 instructions
   ora ($00AB)
   lda ($00CD)
+  jmp ($1234,X)
+  tsb $56
+  tsb $789a
+  bit #$bc
+  bit $00de,x
+  bit $f012,x
+  bra addr
 
 ; testing special cases (plus padding)
   rts
