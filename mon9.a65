@@ -1045,7 +1045,7 @@ BASE=SCRATCH+$0A
 
   ;; and stash the count at COUNT (also upper area of scratch memory)
 COUNT=SCRATCH+$0C
-  lda stackbase,x
+  lda stackbase+3,x
   sta COUNT
   jmp begindis
 
@@ -1095,20 +1095,20 @@ nextinst
   ;; patterns
   ldx #0
 nextspecial
-  lda specialcasetable,x
-  cmp #$FF
-  beq endspecial
-  cmp (BASE),y
-  beq foundspecial
+  lda specialcasetable,x     ; load item from table
+  cmp #$FF          ; check if it's the end of the table
+  beq endspecial    ; if so, exit
+  cmp (BASE),y      ; compare table item to instruction
+  beq foundspecial  ; match?
+  inx               ; move on to next table -- three bytes
   inx
   inx
-  inx
-  bra nextspecial
+  bra nextspecial   ; loop
 foundspecial
-  inx
+  inx               ; when we find a match, jump to address in table
   jmp (specialcasetable,x)
-endspecial
-  lda (BASE),y
+endspecial          ; got to the end of the table without a match
+  lda (BASE),y      ; re-load instruction
   
   and #%00011111    ; checking if it's a branch
   cmp #%00010000
@@ -1116,48 +1116,39 @@ endspecial
 
   ;; block of single byte instructions where the lower nybble is 8
   ;;
+testlow8
   lda (BASE),y      ; get the instruction again (last test was destructive)
   and #%00001111
   cmp #$08          ; single-byte instructions with 8 in lower nybble
-  beq jsingle8
+  bne testxa
+  jmp single8
 
   ;; block of single byte instructions at 8A, 9A, etc
+testxa
   lda (BASE),y      ; get the instruction again (last test was destructive)
   and #%10001111
   cmp #$8A          ; 8A, 9A, etc
-  beq jsinglexa
+  bne testcc00
+  jmp singlexa
 
   ;; otherwise, process according to the regular scheme of aaabbbcc
   ;;
+testcc00
   lda (BASE),y      ; get the instruction again (last test was destructive)
   and #%00000011    ; look at the "cc" bits -- what sort of opcode?
-  beq jbranch00     ; go to branch for cc=00
+  bne testcc10
+  jmp branch00      ; go to branch for cc=00
+testcc10
   cmp #%00000010
-  beq jbranch10     ; go to branch for cc=10
+  bne testcc01
+  jmp branch10     ; go to branch for cc=10
+testcc01
   cmp #%00000001
   bne jothers       ; go to branch for remaining opcodes
   jmp branch01
 
-jbranch00
-  jmp branch00
-jbranch10
-  jmp branch10
 jbranch
   jmp branch
-jdobrk
-  jmp dobrk
-jdojsr
-  jmp dojsr
-jdorti
-  jmp dorti
-jdorts
-  jmp dorts
-jdobra
-  jmp dobra
-jsingle8
-  jmp single8
-jsinglexa
-  jmp singlexa
 jothers
   jmp others
 
