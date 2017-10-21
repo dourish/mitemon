@@ -1,0 +1,102 @@
+
+
+* = $0300
+
+templsb = $0070
+tempmsb = $0071
+n1lsb = $0072
+n1msb = $0073
+n2lsb = $0074
+n2msb = $0075
+reslb = $0076
+reshb = $0077
+
+mult16
+.(
+  ; zero temp
+  stz templsb
+  stz tempmsb
+nextbit
+  ; first bit
+  lda #$01
+  bit n2lsb
+  beq nextshift
+  ; do addition
+  clc
+  lda n1lsb
+  adc templsb
+  sta templsb
+  lda n1msb
+  adc tempmsb
+  sta tempmsb
+nextshift
+  ; shift n1 left
+  asl n1lsb
+  rol n1msb
+  ; shift n1 right
+  clc
+  ror n2msb
+  ror n2lsb
+  bne nextbit
+  lda n2msb
+  bne nextbit
+done
+.)
+  rts
+
+
+div16
+.(
+  ; store zero in temp
+  phy
+  ldy #$10          ; loop count, going 16 times (one per bit)
+  stz templsb
+  stz tempmsb
+  stz reslb
+  stz reshb
+nextbit
+  ; shift n2 (divisand) left, rotating top bit into temp
+  asl n2lsb
+  rol n2msb
+  rol templsb
+  rol tempmsb
+  ; is temp larger than/equal to n1?
+  lda tempmsb       ; msb first -- does that resolve it?
+  cmp n1msb
+  bcc shift0
+  bne subtract
+  lda templsb
+  cmp n1lsb
+  bcs subtract
+  bra shift0
+  ; yes so subtract n1 from temp
+subtract
+  sec ;???
+  lda tempmsb
+  sbc n1msb
+  sta tempmsb
+  lda templsb
+  sbc n1lsb
+  sta templsb
+  ; shift and test
+shift1
+  ; shift result one place left, shifting in a 1 at the bottom
+  sec
+  rol reslb
+  rol reshb
+  bra test
+shift0
+  ; shift result one place left, shifting in a 1 at the bottom
+  clc
+  rol reslb
+  rol reshb
+test
+  ; test-- are we done (ie is n2 now empty?)
+  ; yes-- remainder is in temp (where is result?)
+  dey
+  bne nextbit
+;; we are now done.
+enddiv
+.)
+  ply
+  rts
