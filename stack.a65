@@ -162,6 +162,176 @@ done
   rts
 
 
+;; divide top of stack into second-top of stack, popping both off
+;; and leaving quotient in their place
+div16
+.(
+  phy               ; preserve Y
+
+  ;; make some working space on the stack. two 16-bit values needed.
+  dex
+  dex
+  dex
+  dex
+
+  ;; zero out those spaces
+  stz stackbase+1,x ; stackbase+1 and +2 are remainlsb, remainmsb
+  stz stackbase+2,x
+  stz stackbase+3,x ; stackbase+3 and +4 are resultlsb, resultmsb
+  stz stackbase+4,x
+
+  ; divisor (n1) is stackbase+5 and +6
+  ; divisand (n2) is stackbase+7 and +8
+
+  ldy #$10          ; loop count, going 16 times (one per bit)
+nextbit
+  ; shift n2 (divisand) left, rotating top bit into temp
+  asl stackbase+7,x
+  rol stackbase+8,x
+  rol stackbase+1,x
+  rol stackbase+2,x
+  ; is temp larger than/equal to n1?
+  lda stackbase+2,x       ; msb first -- does that resolve it?
+  cmp stackbase+6,x
+  bcc shift0
+  bne subtract
+  lda stackbase+1,x
+  cmp stackbase+5,x
+  bcs subtract
+  bra shift0
+  ; yes so subtract n1 from temp
+subtract
+  sec
+  lda stackbase+2,x
+  sbc stackbase+6,x
+  sta stackbase+2,x
+  lda stackbase+1,x
+  sbc stackbase+5,x
+  sta stackbase+1,x
+  ; shift and test
+shift1
+  ; shift result one place left, shifting in a 1 at the bottom
+  sec
+  rol stackbase+3,x
+  rol stackbase+4,x
+  bra test
+shift0
+  ; shift result one place left, shifting in a 1 at the bottom
+  clc
+  rol stackbase+3,x
+  rol stackbase+4,x
+test
+  ; test-- are we done (all 16 bits)?
+  dey
+  bne nextbit
+  ;; we are now done.
+  ;; remainder is in stackbase+1 and +2; quotient is in stackbase+3 and +4
+enddiv
+.)
+  ;; clean up. start by putting result in the right place
+  lda stackbase+3,x
+  sta stackbase+7,x
+  lda stackbase+4,x
+  sta stackbase+8,x
+
+  ;; then reset the stack pouinter, dropping three words (two
+  ;; used for working and one used for parameter).
+  inx
+  inx
+  inx
+  inx
+  inx
+  inx
+
+  ply               ; restore y
+  rts
+
+
+
+;; divide top of stack into second-top of stack, popping both off
+;; and leaving remainder in their place
+mod16
+.(
+  phy               ; preserve Y
+
+  ;; make some working space on the stack. two 16-bit values needed.
+  dex
+  dex
+  dex
+  dex
+
+  ;; zero out those spaces
+  stz stackbase+1,x ; stackbase+1 and +2 are remainlsb, remainmsb
+  stz stackbase+2,x
+  stz stackbase+3,x ; stackbase+3 and +4 are resultlsb, resultmsb
+  stz stackbase+4,x
+
+  ; divisor (n1) is stackbase+5 and +6
+  ; divisand (n2) is stackbase+7 and +8
+
+  ldy #$10          ; loop count, going 16 times (one per bit)
+nextbit
+  ; shift n2 (divisand) left, rotating top bit into temp
+  asl stackbase+7,x
+  rol stackbase+8,x
+  rol stackbase+1,x
+  rol stackbase+2,x
+  ; is temp larger than/equal to n1?
+  lda stackbase+2,x       ; msb first -- does that resolve it?
+  cmp stackbase+6,x
+  bcc shift0
+  bne subtract
+  lda stackbase+1,x
+  cmp stackbase+5,x
+  bcs subtract
+  bra shift0
+  ; yes so subtract n1 from temp
+subtract
+  sec
+  lda stackbase+2,x
+  sbc stackbase+6,x
+  sta stackbase+2,x
+  lda stackbase+1,x
+  sbc stackbase+5,x
+  sta stackbase+1,x
+  ; shift and test
+shift1
+  ; shift result one place left, shifting in a 1 at the bottom
+  sec
+  rol stackbase+3,x
+  rol stackbase+4,x
+  bra test
+shift0
+  ; shift result one place left, shifting in a 1 at the bottom
+  clc
+  rol stackbase+3,x
+  rol stackbase+4,x
+test
+  ; test-- are we done (all 16 bits)?
+  dey
+  bne nextbit
+  ;; we are now done.
+  ;; remainder is in stackbase+1 and +2; quotient is in stackbase+3 and +4
+enddiv
+.)
+  ;; clean up. start by putting result in the right place
+  lda stackbase+1,x
+  sta stackbase+7,x
+  lda stackbase+2,x
+  sta stackbase+8,x
+
+  ;; then reset the stack pouinter, dropping three words (two
+  ;; used for working and one used for parameter).
+  inx
+  inx
+  inx
+  inx
+  inx
+  inx
+
+  ply               ; restore y
+  rts
+
 ;; at the address denoted by the top of the stack, read a two-character
 ;; string and interpret it as a hex byte, decode, and leave the result
 ;; on the stack.
