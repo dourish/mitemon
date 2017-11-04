@@ -76,6 +76,8 @@ swap16
   inx
   rts
 
+;; Add the two 16-byte words on the top of the stack, leaving
+;; the result on the stack in their place.
 add16
   clc                        ; clear carry
   lda stackbase+1,x          ; add the lower byte
@@ -86,6 +88,77 @@ add16
   sta stackbase+4,x          ; again, back in the second slot
   inx                        ; shink the stack so that sum is now
   inx                        ; in the top slot
+  rts
+
+;; Subtract the two 16-byte words on the top of the stack, leaving
+;; the result on the stack in their place.
+sub16
+  sec                        ; set the carry
+  lda stackbase+3,x          ; substract the lower byte
+  sbc stackbase+1,x
+  sta stackbase+3,x          ; put it back in the second slot
+  lda stackbase+4,x          ; then the upper byte
+  sbc stackbase+2,x
+  sta stackbase+4,x          ; again, back in the second slot
+  inx                        ; shink the stack so that result is now
+  inx                        ; in the top slot
+  rts
+
+;; Multiply the two 16-byte words on the top of the stack, leaving
+;; the result on the stack in their place.
+mult16
+.(
+  ;; make some temporary space on the stack
+  dex
+  dex
+
+  ;stz templsb
+  ;stz tempmsb
+  stz stackbase+1,x
+  stz stackbase+2,x
+
+  ;; n1lsb stackbase+3,x
+  ;; n1msb stackbase+4,x
+  ;; n2lsb stackbase+5,x
+  ;; n2msb stackbase+6,x
+nextbit
+  ; first bit
+  lda #$01
+  bit stackbase+5,x
+  beq nextshift
+  ; do addition
+  clc
+  lda stackbase+3,x
+  adc stackbase+1,x
+  sta stackbase+1,x
+  lda stackbase+4,x
+  adc stackbase+2,x
+  sta stackbase+2,x
+nextshift
+  ; shift n1 left
+  asl stackbase+3,x
+  rol stackbase+4,x
+  ; shift n2 right
+  clc
+  ror stackbase+6,x
+  ror stackbase+5,x
+  bne nextbit
+  lda stackbase+6,x
+  bne nextbit
+done
+.)
+  ;; clean up the mess we made on the stack
+  ;; first, put the result back in the right place
+  lda stackbase+1,x
+  sta stackbase+5,x
+  lda stackbase+2,x
+  sta stackbase+6,x
+  ;; then, discard our temporary space
+  inx
+  inx
+  ;; finally, discard multiplicand
+  inx
+  inx
   rts
 
 
@@ -276,6 +349,71 @@ next
   jsr push16
   rts
 
+;; read a 16-bit number in decimal. need to allow for the fact that
+;; there may be a variable number of digits (but presume that
+;; there is always one).
+;; NOTE changed the label because it was calling the wrong place!
+readdec16
+  jsr pop16         ; move the string address into stackaccess
+
+  dex               ; make some workspace on the stack. need two 16-byte
+  dex               ; words, one of which will eventually be our result
+  dex               ; so, workspace space is stackbase+1,x to stackbase+4,x
+  dex
+  stz stackbase+1,x ; zero out both 16-bit values
+  stz stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  phy               ; preserve y
+  ldy #0            ; y indexes digits of the input string
+nextdigit
+  lda (stackaccess),y
+
+  sec
+  sbc #$30          ; turn from ascii digit into a number
+  clc               ; add it to our partial result
+  adc stackbase+3,x
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+  iny               ; bump the character count
+  cpy #5            ; was that the last digit to be read? (max 5)
+  beq donelastdigit  
+  lda (stackaccess),y
+  beq donelastdigit ; stop stop if we hit null-terminator
+
+mult10              ; more digits, so multiply by ten and go around
+  asl stackbase+3,x ; shift left to multiply by two
+  rol stackbase+4,x
+
+  lda stackbase+3,x ; make a copy in the other temporary slot
+  sta stackbase+1,x
+  lda stackbase+4,x
+  sta stackbase+2,x
+  asl stackbase+1,x ; shift the copy left twice more, so x8 in total
+  rol stackbase+2,x
+  asl stackbase+1,x
+  rol stackbase+2,x
+
+  clc               ; add them (8x + 2x = 10x)
+  lda stackbase+1,x
+  adc stackbase+3,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  adc stackbase+4,x
+  sta stackbase+4,x
+
+  bra nextdigit
+
+donelastdigit
+  inx               ; drop one of the temporary variables
+  inx               ; but leave the other, which is our result
+  ply               ; restore y
+  rts
+
+
 
 print16hex
   jsr pop16
@@ -293,7 +431,7 @@ print8hex
 
 print16dec
   ;; create myself three bytes of storage on the stack
-  DEX
+  dex
   dex
   dex
   
@@ -303,10 +441,10 @@ print16dec
   stz stackbase+2,x ; dec1
   stx stackbase+3,x ; dec2
 
-  ;; temporary storage will be in the SCRATCH area
+  phy               ; preserve Y
   lda #0
   sed
-  ldy #16
+  ldy #16           ; count of bits we are processing
 
 .(
 loop
@@ -378,11 +516,12 @@ loop
   jsr puta
 
   ;; clean up -- reclaim our temporary space and also pop item from stack
-  INX              ; cleaning
+  ply              ; restore Y
+  inx              ; clean up our three bytes
   inx
   inx
-  inx              ; popping
-  INX
+  inx              ; popping (discard result)
+  inx              ; second byte
   rts
   
   
