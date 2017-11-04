@@ -1,0 +1,302 @@
+
+* = $0300
+
+SCRATCH    = $0010  ; through to $001F
+ARGINDEX   = $0020  ; and on to $002F for up to 16 arguments
+INPUT      = $0200  ; block out this page for monitor command input
+BASE       = $0050  ; and $0051
+
+current    = $0080  ; where we store the # of the current argument
+
+#include "../decl.a65"
+
+jmp start
+
+#include "../stack.a65"
+
+
+
+start
+
+  stz current
+  stz ARGINDEX
+
+;if there is no more input to consume, print a prompt and read a line
+  lda current
+  cmp ARGINDEX
+  bcc process
+  lda #'>
+  jsr puta
+  lda #$20
+  jsr puta
+  jsr readline
+  jsr parseinput
+  
+process  
+;look at the next input token
+
+  ldy #0
+nexttoken
+  cpy ARGINDEX      ; have we done all the arguments?
+  bne continue
+  jmp donebytes
+  ;beq donebytes     ; if so, jump to the end of this round
+
+continue
+  iny               ; nope, so proceed to next argument
+  clc
+  lda #<INPUT       ; load the base address for the input buffer
+  adc ARGINDEX,y    ; and add the offset to the y'th argument
+  sta stackaccess   ; store at stackaccess
+  lda #>INPUT       ; then the upper byte
+  adc #0            ; in case we cross page boundary (but we shouldn't)
+  sta stackaccess+1
+
+  phy
+  ldy #0
+  lda (stackaccess),y
+  ply
+
+  ; is it a number?
+  cmp #'0
+  bcc nope
+  cmp #'9
+  beq nope
+  bcs nope
+
+  jsr push16
+  ;jsr read16hex
+  jsr readdec16
+  jmp loop
+
+nope
+;otherwise, if it's a +, do add... etc
+
+.(
+  cmp #'+
+  bne nexttest
+  jsr add16
+  jmp loop
+nexttest
+.)
+.(
+  cmp #'-
+  bne nexttest
+  jsr sub16
+  jmp loop
+nexttest
+.)
+.(
+  cmp #'*
+  bne nexttest
+  jsr mult16
+  jmp loop
+nexttest
+.)
+.(
+  cmp #'/
+  bne nexttest
+  jsr div16
+  jmp loop
+nexttest
+.)
+.(
+  cmp #'?
+  bne nexttest
+  jsr mod16
+  jmp loop
+nexttest
+.)
+.(
+  cmp #'=
+  bne nexttest
+  bra doprint
+nexttest
+.)
+.(
+  cmp #'q
+  bne nexttest
+  jsr crlf
+  rts
+nexttest
+.)
+
+;otherwise, print an error (minimal!)
+  lda #'?
+  jsr puta
+
+loop
+  jmp nexttoken
+
+doprint
+  ; test for stack underflow
+  cpx #$FE          ; must be at least two bytes on the stack
+  bcs underflow
+  lda #$20          ; print a couple of spaces
+  jsr puta
+  jsr puta
+  jsr print16dec    ; print top of stack in decimal
+  jmp loop
+
+underflow           ; this is a kinda crappy error message
+  lda #'!
+  jsr puta
+  jmp loop
+
+donebytes
+  jsr crlf
+  jmp start
+
+
+
+
+crlf
+  pha
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0d
+  sta ACIA_DATA
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0a
+  sta ACIA_DATA
+  pla
+  rts
+
+
+;;;
+;;; output the character code in the accumulator
+;;;
+puta
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+
+
+hextable:	 .byte "0123456789ABCDEF"
+
+
+
+readline
+  ldy #0
+readchar
+.(
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  cmp #$08           ; check for backspace
+  beq backspace
+  cmp #$0D           ; check for newline
+  beq done
+  sta INPUT,y        ; track the input
+  iny
+  jsr puta           ; echo the typed character
+  jmp readchar       ; loop to repeat
+backspace
+  cpy #0             ; beginning of line?
+  beq readchar
+  dey                ; if not, go back one character
+  jsr puta           ; move cursor back
+  jmp readchar
+
+  ;; this is where we land if the line input has finished
+  ;;
+done
+  lda #0
+  sta INPUT,y       ; add a null terminator
+  rts
+
+parseinput
+  phx               ; preserve x, since it's our private stack pointer
+  ldx #0
+  ldy #0
+
+.(
+;; look for non-space
+nextchar
+  lda INPUT,x
+  cmp #32
+  bne nonspace
+  inx
+  jmp nextchar
+
+;; mark the start of the word
+nonspace
+  iny               ; maintain a count of words in y
+  stx ARGINDEX,y
+;; look for space
+lookforspace
+  inx
+  lda INPUT,x
+  beq endofline     ; check for null termination
+  cmp #32           ; only looking for spaces. Tab?
+  beq endofword
+  jmp lookforspace
+;; didn't hit a terminator, so there must be more.
+;; terminate this word with a zero and then continue
+endofword
+  lda #0
+  sta INPUT,x         ; null-terminate
+  inx
+  jmp nextchar        ; repeat
+endofline
+  ;; we're done
+  ;; cache the arg count
+  sty ARGINDEX
+
+  ;; restore x and return
+  plx
+  rts
+.)
