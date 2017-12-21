@@ -599,6 +599,8 @@ print8hex
   jsr putax
   rts
 
+;;; This routine is only called from my Forth, so I've modified it to
+;;; suit. Mainly, that means printing a space before the number.
 print16dec
   ;; create myself three bytes of storage on the stack
   dex
@@ -637,14 +639,31 @@ loop
   ;; could do this using y as an index and looping.. rather than unrolling
   ;; as here
 
+  ;; set a flag to determine whether we've printed anything non-zero
+  stz SCRATCH
+
+  ;; print leading space
+  lda #$20
+  jsr puta
+
   ;; decimal 2
   ;; mask off lower four bits
   lda stackbase+3,x
   and #%00001111
   clc
   adc #'0
-  jsr puta
+.(
+  cmp #'0
+  bne continue      ; not a zero, so proceed to printing
+  bit SCRATCH       ; is this a leading zero (have we printed anything?)
+  beq dec1up        ; nothing printed yet, so skip this digit
+continue
+  jsr puta          ; print the digit
+.)
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
 
+dec1up
   ;; decimal 1
   ;; first, upper four bits
   lda stackbase+2,x
@@ -656,15 +675,35 @@ loop
   ror
   clc
   adc #'0
-  jsr puta
+.(
+  cmp #'0
+  bne continue      ; not a zero, so proceed to printing
+  bit SCRATCH       ; is this a leading zero (have we printed anything?)
+  beq dec1low       ; nothing printed yet, so skip this digit
+continue
+  jsr puta          ; print the digit
+.)
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
 
+dec1low
   ;; and then lower four bits
   lda stackbase+2,x
   and #%00001111
   clc
   adc #'0
-  jsr puta
+.(
+  cmp #'0
+  bne continue      ; not a zero, so proceed to printing
+  bit SCRATCH       ; is this a leading zero (have we printed anything?)
+  beq dec0up        ; nothing printed yet, so skip this digit
+continue
+  jsr puta          ; print the digit
+.)
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
 
+dec0up
   ;; and finally decimal 0
   ;; first, upper four bits
   lda stackbase+1,x
@@ -676,9 +715,19 @@ loop
   ror
   clc
   adc #'0
-  jsr puta
+.(
+  cmp #'0
+  bne continue      ; not a zero, so proceed to printing
+  bit SCRATCH       ; is this a leading zero (have we printed anything?)
+  beq dec0low       ; nothing printed yet, so skip this digit
+continue
+  jsr puta          ; print the digit
+.)
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
 
-  ;; and then lower four bits
+dec0low
+  ;; and then lower four bits -- last digit, so no check for zero
   lda stackbase+1,x
   and #%00001111
   clc
