@@ -524,6 +524,7 @@ next
 ;; there is always one).
 ;; NOTE changed the label because it was calling the wrong place!
 readdec16
+.(
   jsr pop16         ; move the string address into stackaccess
 
   dex               ; make some workspace on the stack. need two 16-byte
@@ -581,6 +582,7 @@ donelastdigit
   inx               ; drop one of the temporary variables
   inx               ; but leave the other, which is our result
   ply               ; restore y
+.)
   rts
 
 
