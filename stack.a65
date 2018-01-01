@@ -166,8 +166,91 @@ done
 ;; and leaving quotient in their place
 div16
 .(
+  jsr divmod16
+
+  ;; remainder is in stackbase+1 and +2; quotient is in stackbase+3 and +4
+enddiv
+.)
+  ;; clean up. start by putting result in the right place
+  lda stackbase+3,x
+  sta stackbase+7,x
+  lda stackbase+4,x
+  sta stackbase+8,x
+
+  ;; then reset the stack pointer, dropping three words (two
+  ;; used for working and one used for parameter).
+  inx
+  inx
+  inx
+  inx
+  inx
+  inx
+
+  ;; if the lowest bit of SCRATCH is set, then negate the result
+  lda SCRATCH
+  bit #1
+  beq donediv
+  clc
+  lda stackbase+1,x
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  adc #0
+  sta stackbase+2,x
+
+donediv
+  rts
+
+;; divide top of stack into second-top of stack, calculating both
+;; result and remainder
+divmod16
+.(
   phy               ; preserve Y
 
+  ;; handle negative numbers. we convert everything to positive and
+  ;; keep a note of whether we need to negate the result.
+  stz SCRATCH
+
+  ;; BUG can I combine these two operations to do this faster?
+  lda stackbase+2,x
+  bit #%10000000
+  beq next
+  eor #$ff
+  sta stackbase+2,x
+  lda stackbase+1,x
+  eor #$ff
+  sta stackbase+1,x
+  clc
+  lda stackbase+1,x
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #0
+  sta stackbase+2,x
+  inc SCRATCH
+
+next
+  ;; BUG can I combine these two operations to do this faster?
+  lda stackbase+4,x
+  bit #%10000000
+  beq continue
+  eor #$ff
+  sta stackbase+4,x
+  lda stackbase+3,x
+  eor #$ff
+  sta stackbase+3,x
+  clc
+  lda stackbase+3,x
+  adc #1
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+  inc SCRATCH
+
+continue
   ;; make some working space on the stack. two 16-bit values needed.
   dex
   dex
@@ -228,20 +311,6 @@ test
   ;; remainder is in stackbase+1 and +2; quotient is in stackbase+3 and +4
 enddiv
 .)
-  ;; clean up. start by putting result in the right place
-  lda stackbase+3,x
-  sta stackbase+7,x
-  lda stackbase+4,x
-  sta stackbase+8,x
-
-  ;; then reset the stack pouinter, dropping three words (two
-  ;; used for working and one used for parameter).
-  inx
-  inx
-  inx
-  inx
-  inx
-  inx
 
   ply               ; restore y
   rts
@@ -252,65 +321,8 @@ enddiv
 ;; and leaving remainder in their place
 mod16
 .(
-  phy               ; preserve Y
+  jsr divmod16
 
-  ;; make some working space on the stack. two 16-bit values needed.
-  dex
-  dex
-  dex
-  dex
-
-  ;; zero out those spaces
-  stz stackbase+1,x ; stackbase+1 and +2 are remainlsb, remainmsb
-  stz stackbase+2,x
-  stz stackbase+3,x ; stackbase+3 and +4 are resultlsb, resultmsb
-  stz stackbase+4,x
-
-  ; divisor (n1) is stackbase+5 and +6
-  ; divisand (n2) is stackbase+7 and +8
-
-  ldy #$10          ; loop count, going 16 times (one per bit)
-nextbit
-  ; shift n2 (divisand) left, rotating top bit into temp
-  asl stackbase+7,x
-  rol stackbase+8,x
-  rol stackbase+1,x
-  rol stackbase+2,x
-  ; is temp larger than/equal to n1?
-  lda stackbase+2,x       ; msb first -- does that resolve it?
-  cmp stackbase+6,x
-  bcc shift0
-  bne subtract
-  lda stackbase+1,x
-  cmp stackbase+5,x
-  bcs subtract
-  bra shift0
-  ; yes so subtract n1 from temp
-subtract
-  sec
-  lda stackbase+2,x
-  sbc stackbase+6,x
-  sta stackbase+2,x
-  lda stackbase+1,x
-  sbc stackbase+5,x
-  sta stackbase+1,x
-  ; shift and test
-shift1
-  ; shift result one place left, shifting in a 1 at the bottom
-  sec
-  rol stackbase+3,x
-  rol stackbase+4,x
-  bra test
-shift0
-  ; shift result one place left, shifting in a 1 at the bottom
-  clc
-  rol stackbase+3,x
-  rol stackbase+4,x
-test
-  ; test-- are we done (all 16 bits)?
-  dey
-  bne nextbit
-  ;; we are now done.
   ;; remainder is in stackbase+1 and +2; quotient is in stackbase+3 and +4
 enddiv
 .)
@@ -329,7 +341,6 @@ enddiv
   inx
   inx
 
-  ply               ; restore y
   rts
 
 ;; at the address denoted by the top of the stack, read a two-character
