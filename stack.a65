@@ -604,6 +604,7 @@ print8hex
 ;;; This routine is only called from my Forth, so I've modified it to
 ;;; suit. Mainly, that means printing a space before the number.
 print16dec
+.(
   ;; create myself three bytes of storage on the stack
   dex
   dex
@@ -743,6 +744,7 @@ dec0low
   inx
   inx              ; popping (discard result)
   inx              ; second byte
+.)
   rts
   
   
