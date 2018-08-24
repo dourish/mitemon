@@ -285,12 +285,18 @@ nextbit
   ; yes so subtract n1 from temp
 subtract
   sec
-  lda stackbase+2,x
-  sbc stackbase+6,x
-  sta stackbase+2,x
+;  lda stackbase+2,x
+;  sbc stackbase+6,x
+;  sta stackbase+2,x
+;  lda stackbase+1,x
+;  sbc stackbase+5,x
+;  sta stackbase+1,x
   lda stackbase+1,x
   sbc stackbase+5,x
   sta stackbase+1,x
+  lda stackbase+2,x
+  sbc stackbase+6,x
+  sta stackbase+2,x
   ; shift and test
 shift1
   ; shift result one place left, shifting in a 1 at the bottom
