@@ -123,6 +123,7 @@ table11
 ;; More utility routines
 ;;
 #include "stack.a65"
+#include "stackext.a65"
 
 ;; Finally -- we actually start executing code
 ;;
