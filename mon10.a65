@@ -2300,6 +2300,96 @@ endstr
 
 
 
+;;; Handle interrupts. Since the Mite doens't have interrupt lines
+;;; connected, we don't even bother decoding the interrupt; instead,
+;;; we just presume that it's a software interrupt (ie, a BRK),
+;;; print the registers, and jump back into the command loop for the
+;;; monitor.
+interrupt
+  pha               ; preserve registers
+  phx
+  phy
+
+  ;; at this point, the stack is:
+  ;;   Y X A S PCl PCh
+  ;;  Y is at $101,SP
+  ;;  PCl is at $106,SP
+
+  tsx
+  jsr crlf
+
+  ;; print the PC
+  lda #"P
+  jsr puta
+  lda #"C
+  jsr puta
+  lda #"=
+  jsr puta
+  lda #"$
+  jsr puta
+  lda $106,x
+  jsr putax
+  lda $105,x
+  jsr putax
+  lda #$20
+  jsr puta
+
+  ;; print A
+  lda #"A
+  jsr puta
+  lda #"=
+  jsr puta
+  lda #"$
+  jsr puta
+  lda $103,x
+  jsr putax
+  lda #$20
+  jsr puta
+
+  ;; print X
+  lda #"X
+  jsr puta
+  lda #"=
+  jsr puta
+  lda #"$
+  jsr puta
+  lda $102,x
+  jsr putax
+  lda #$20
+  jsr puta
+
+  ;; print Y
+  lda #"Y
+  jsr puta
+  lda #"=
+  jsr puta
+  lda #"$
+  jsr puta
+  lda $101,x
+  jsr putax
+  lda #$20
+  jsr puta
+
+  ;; print S
+  lda #"S
+  jsr puta
+  lda #"=
+  jsr puta
+  lda #"$
+  jsr puta
+  lda $104,x
+  jsr putax
+  lda #$20
+  jsr puta
+
+  pla               ; restore the stack to post-interrupt state
+  pla
+  pla
+
+  jsr crlf
+  jmp reploop
+  
+
 
 
 ;;;
