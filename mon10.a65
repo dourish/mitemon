@@ -2281,13 +2281,14 @@ interrupt
   pha               ; preserve registers
   phx
   phy
+  tsx               ; leaves SP in X
+  phx
 
   ;; at this point, the stack is:
-  ;;   Y X A S PCl PCh
-  ;;  Y is at $101,SP
-  ;;  PCl is at $106,SP
+  ;;   SP Y X A S PCl PCh
+  ;;  SP is at $101,SP, which is $100,X
+  ;;  PCh is at $106,X
 
-  tsx
   jsr crlf
 
   ;; print the PC
@@ -2342,6 +2343,22 @@ interrupt
   lda #$20
   jsr puta
 
+  ;; print SP
+  lda #"S
+  jsr puta
+  lda #"P
+  jsr puta
+  lda #"=
+  jsr puta
+  lda #"$
+  jsr puta
+  lda $100,x
+  clc               ; BUG this isn't right...
+  adc #3            ; correct for the extra values we've pushed
+  jsr putax         ; so we print SP as it was when interrupt received
+  lda #$20
+  jsr puta
+
   ;; print S
   lda #"S
   jsr puta
@@ -2355,6 +2372,7 @@ interrupt
   jsr puta
 
   pla               ; restore the stack to post-interrupt state
+  pla
   pla
   pla
 
