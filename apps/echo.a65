@@ -1,0 +1,17 @@
+
+* = $0300
+PRINTVEC=$0042
+INPUT=$7F00
+
+#include "jmptable.a65"
+
+  ldy #0
+nextchar
+  lda INPUT,y
+  beq done
+  jsr puta
+  iny
+  bne nextchar
+
+  rts
+
