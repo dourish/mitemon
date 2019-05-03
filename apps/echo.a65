@@ -9,9 +9,9 @@ INPUT=$7F00
 nextchar
   lda INPUT,y
   beq done
-  jsr puta
+  jsr ROMPUTA
   iny
   bne nextchar
-
+done
   rts
 
