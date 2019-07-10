@@ -13,5 +13,5 @@ PRINTVEC=$0042
   rts
 
 hellostr
-  .byte $0d, $0a, "Hello, world!", $0d, $0a, $00
+  .byte "Hello, world!", $0d, $0a, $00
 

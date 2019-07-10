@@ -6,6 +6,24 @@ INPUT=$7F00
 #include "jmptable.a65"
 
   ldy #0
+  ;; skip to first space
+skip1
+  lda INPUT,y
+  beq done
+  cmp #32
+  beq skip2
+  iny
+  beq done
+  bra skip1
+  ;; now skip to first non-space
+skip2
+  lda INPUT,y
+  beq done
+  cmp #32
+  bne nextchar
+  iny
+  beq done
+  bra skip2
 nextchar
   lda INPUT,y
   beq done
@@ -13,5 +31,9 @@ nextchar
   iny
   bne nextchar
 done
+  lda #$0a
+  jsr ROMPUTA
+  lda #$0d
+  jsr ROMPUTA
   rts
 

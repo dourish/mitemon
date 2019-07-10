@@ -10,7 +10,7 @@
 ;;
 ACIA_DATA    = $8800
 ACIA_STATUS  = $8801
-ACIA_COMMAND = $8802
+ACIA_COMMAND = $8800
 ACIA_CONTROL = $8803
 
 ;; VIA (6522) registers
@@ -34,6 +34,4 @@ VIA_IFR   = $800D
 VIA_IER   = $800E
 VIA_ORAX  = $800F
 
-;; LCD/HD44780 registers?
-;;
 

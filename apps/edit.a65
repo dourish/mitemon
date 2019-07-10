@@ -1,0 +1,1108 @@
+
+;;;
+;;; Standalone screen editor (extracted and adapted from FORTH).
+;;;
+
+  * = $0300
+
+;;;
+;;; Variables/space setup
+;;;
+
+SCRATCH    = $0010  ; through to $001F (adopted from monitor)
+PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
+
+;;; 
+;;; KEY SYSTEM VARIABLES
+;;;
+;;; BASE is variable holding the current numeric base
+;;; IPTR is the input pointer (next character to be interpreted)
+;;; IP is the instruction pointer
+;;; DT (dictionary top) pointer to start (actually, end) of dictionary
+;;; RP is return stack pointer
+;;; XT holds execution token of currently executing word
+;;; CODEVEC holds the location of the code for the next instruction
+;;; DP holds pointer to the next available dictionary space
+;;; DPTR is an internal variable for traversing the dictionary
+;;; STATE is the system status flags (e.g. compilation flag)
+;;; CWORD holds a pointer to the word currently being compiled
+;;; SOURCE indicates where input is coming from (0 for terminal)
+;;; INPUT points to the input buffer
+;;; WORD points to the temporary string processing space
+;;; INBUFF points to the current non-terminal input area
+;;; 
+;;;
+BASE=$000A          ; and 000B (store two bytes but we only use lower)
+USEBLKS=$000D       ; one byte only, block count of USING file
+; leave $000E and $000F clear...
+IPTR=$0020          ; and 0021 (input pointer)
+NEXTSECTOR=$0040    ; through $0043 -- next sector to be read in stream
+FILESIZE=$0044      ; through $0047 -- size of file in stream
+READSIZE=$0048      ; through $004B -- how much data still to read
+IP=$0050            ; and 0051
+RP=$0052            ; and 0053 (return stack pointer)
+DT=$0054            ; and 0055 (ptr to top of dictionary)
+; reserve 0056, 0057 (we need 0057 to store a JMP instruction)
+XT=$0058            ; and 0059
+STATE=$005A         ; and 005B (compiler flag)
+DPTR=$005C          ; and 005D (used for searching the dictionary)
+DP=$005E            ; and 005F (dictionary pointer i.e. HERE)
+; $0060 is free
+CWORD=$0061         ; and 0062 (word currently being compiled)
+PADPTR=$0063        ; and 0064 (pointer to text area)
+SOURCE=$0065        ; current input location
+INBUFF=$0066        ; and 0067
+CURSEC=$0068        ; through $006B (caches sector stored at LBLOCK)
+USEBASE=$006C       ; through $006F (base sector address for block file)
+USE=$0070           ; and 0071
+PREV=$0072          ; and 0073
+USENAME=$0074       ; through 007F
+RBASE=$0200         ; base for R-stack
+RESERVED=$6340      ; high water mark for user data
+TEMPSTR=$6340       ; temporary string storage (for S")
+FIRST=$63E0         ; start of space for blocks/disk buffers
+LBLOCK=$7C00        ; address of lower I/O data page
+HBLOCK=$7D00        ; address of upper I/O data page
+IOSENTINEL=$7E00    ; and 7E01 MUST BE PAGE ALIGNED SEE DODIR
+PAD=$7E02           ; PAD (string assembly area)
+WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
+INPUT=$7F00         ; input space
+
+XRECV=$C65C         ; address of XMODEM subroutine from monitor
+DUMP=$C4F5          ; address of DUMP subroutine from monitor
+
+MBR=$0200           ; cache SD card master boot record in unused stack space
+MBR_NFATS=$0210     ; address of FAT count within cache
+MBR_LABEL=$022B     ; address of label within cache
+
+;;; FLAGS AND CONSTANTS
+;;;
+COMPILE=%00000001   ; status flags
+SPI_CMD=64
+
+IMM=%00100000       ; flag for IMMEDIATE word (ie executed in compile mode)
+CPO=%01000000       ; flag for COMPILE-ONLY word (give error in interpreter)
+
+;;; The flags below are left on the stack by the compiler to signal
+;;; what sort of clean-up operation is needed at the end of a loop.
+;;; They also ensure that nesting is correct.
+IFELSEFLAG=$FF      ; left by IF and ELSE
+LEAVEFLAG=$FE       ; left by LEAVE
+DOFLAG=$FD          ; left by DO
+BEGINFLAG=$FC       ; left by BEGIN
+WHILEFLAG=$FB       ; left by WHILE
+
+BLOCKSIZE=1024
+NBUFFERS=6
+BUFFERSIZE=BLOCKSIZE+4
+BUFFERSPACE=BUFFERSIZE*NBUFFERS
+LIMIT=FIRST+BUFFERSPACE
+
+;;; DECL.A65 has declarations for the VIA and ACIA registers
+#include "../decl.a65"
+
+
+  jmp doedit     ; jump past code defined in stack routines
+
+;;; STACK.A65 has definitions for basic stack operations
+#include "../stack.a65"
+
+
+;;;
+;;; *** SCREEN EDITOR
+;;;
+;;; Basic screen editor for text, using EMACS-like commands.
+;;; Assumes 16 rows of 64 characters to fit with block/buffer size,
+;;; with nulls filling empty space.
+;;;
+
+;;; Just for the editor, relabel a bunch of the scratch space.
+temp=SCRATCH
+row=SCRATCH+1
+col=SCRATCH+2
+rowbase=SCRATCH+3 ; and 4
+count=SCRATCH+5
+upper=SCRATCH+6   ; and 7
+lower=SCRATCH+8   ; and 9
+jmpvec=SCRATCH+10 ; and 11
+
+NROWS=16
+MAXROW=NROWS-1
+NCOLS=64
+MAXCOL=NCOLS-1
+TEXTBASE=SCRATCH+12
+TEXTSIZE=NROWS*NCOLS
+
+;;; table of entry points for the commands invoked by each
+;;; control-key.
+table
+  .word tostart     ; a
+  .word back        ; b
+  .word undefined   ; c
+  .word delfwd      ; d
+  .word toend       ; e
+  .word forw        ; f
+  .word undefined   ; g
+  .word delback     ; h
+  .word undefined   ; i
+  .word undefined   ; j
+  .word delline     ; k
+  .word repaint     ; l
+  .word newline     ; m
+  .word nextch      ; n
+  .word openline    ; o
+  .word prev        ; p
+  .word undefined   ; q
+  .word undefined   ; r
+  .word undefined   ; s
+  .word undefined   ; t
+  .word undefined   ; u
+  .word undefined   ; v
+  .word undefined   ; w
+  .word endedit     ; x
+  .word undefined   ; y
+  .word undefined   ; z
+
+
+;;; entry point for the editor. the stack indicates the disk
+;;; block to be edited, so we start by calling block to load
+;;; it and determine the buffer address.
+doedit
+;  jsr blocksub
+  lda stackbase+1,x
+  sta TEXTBASE
+  lda stackbase+2,x
+  sta TEXTBASE+1
+  inx               ; clean up the stack
+  inx
+  phx
+  jsr beginedit
+  plx
+  rts
+
+beginedit
+;  stz rowbase   ; set rowbase to 0
+;  lda #$60
+;  sta rowbase+1
+
+  ;; reset variables and screen for startup
+  lda TEXTBASE
+  sta rowbase
+  lda TEXTBASE+1
+  sta rowbase+1
+  stz row
+  stz col
+
+  ;; BUG HACK HORRIBLE
+  ;; on loading, convert trailing spaces to NULs and make sure
+  ;; that there's a NUL at the end of each line
+  lda rowbase
+  sta lower
+  lda rowbase+1
+  sta lower+1
+  lda #NROWS
+  sta count
+.(
+nulloop
+  ldy #MAXCOL
+  lda #0
+  sta (lower),y
+  dey
+spaceloop
+  lda (lower),y
+  beq checknext
+  cmp #32
+  beq replace
+  cmp #10
+  beq replace
+  bra finishline
+replace
+  lda #0
+  sta (lower),y
+checknext
+  dey
+  cpy #255
+  bne spaceloop  
+finishline
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  lda lower+1
+  adc #0
+  sta lower+1
+  dec count
+  lda count
+  bne nulloop
+.)
+  jmp repaint ; repaint jumps back to editloop below
+
+;;; This is the main editor dispatch loop. Fetch a character; if it's
+;;; in the command-code range, then look it up in the table; otherwise,
+;;; insert it. Everything is done with JMPs and every command JMPs back
+;;; to here. Escape is handled with a separate messy routine rather
+;;; that a second table.
+editloop
+
+  jsr getchar
+  cmp #$1B        ; if it's less than 27, it's a control code
+  beq escape      ; exactly 27 is escape
+  bcs notcmd      ; over 27 is not a command
+  dec             ; subtract 1 (to turn it into a 0-ranged value)
+  asl             ; shift to multiply by two
+  tax             ; that's an offset, so put it in X
+  jmp (table,x)   ; invoke the command
+
+notcmd
+  jsr insert      ; not a command, so insert the character
+  bra editloop
+
+escape
+  jsr getchar
+  cmp #"f"
+  beq escf
+  cmp #"b"
+  beq escb
+  cmp #"["
+  beq arrow
+  jmp editloop
+escf
+  jmp fowdword
+escb
+  jmp backword
+arrow
+  jsr getchar
+  cmp #"A"
+  beq arrowup
+  cmp #"B"
+  beq arrowdown
+  cmp #"C"
+  beq arrowright
+  cmp #"D"
+  beq arrowleft
+  jmp editloop
+arrowup
+  jmp prev
+arrowdown
+  jmp nextch
+arrowright
+  jmp forw
+arrowleft
+  jmp back
+
+;;; move forward a word. BUG only really uses spaces as delimiters;
+;;; should really use any non-alpha character.
+fowdword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+findword
+  lda (rowbase),y
+  beq endofline
+  cmp #$20
+  bne findend
+  iny
+  cpy #MAXCOL
+  beq endofline
+  bra findword
+findend
+  ;; now find the end of the word
+  lda (rowbase),y
+  beq endofline
+  cmp #$20
+  beq found  
+  iny
+  cpy #MAXCOL
+  bne findend
+found  
+endofline
+  sty col
+  jsr moveto
+  jmp editloop
+.)
+
+backword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+  beq donebackword
+findword
+  lda (rowbase),y
+  beq nextchar
+  cmp #$20
+  bne findstart
+nextchar
+  dey
+  beq startofline
+  bra findword
+findstart
+  ;; now find the end of the word
+  lda (rowbase),y
+  beq startofline
+  cmp #$20
+  beq found  
+  dey
+  bne findstart
+found  
+startofline
+  sty col
+  jsr moveto
+donebackword
+  jmp editloop
+.)
+
+
+;; for small integers (<100), convert to decimal and output
+;; use this for the ansi codes for positioning
+todecimal
+.(
+  ldy #$30
+  sty temp  ; temp
+convloop
+  cmp #$0A
+  bmi donedigit
+  sec
+  sbc #$0A
+  inc temp
+  bne convloop
+donedigit
+  tay
+  lda temp
+  jsr puta
+  tya
+  clc
+  adc #$30
+  jsr puta
+  rts
+.)
+
+
+;; clear the screen
+cls
+  lda #$1B  ; esc
+  jsr puta
+  lda #$5B  ; "["
+  jsr puta
+  lda #$32  ; "2"
+  jsr puta
+  lda #$4A  ; "J"
+  jsr puta
+  rts
+
+;; move cursor to home position
+home
+  lda #$1B  ; esc
+  jsr puta
+  lda #$5B  ; [
+  jsr puta
+  lda #$48  ; H
+  jsr puta
+  rts
+
+;; clear from current line to bottom of screen
+clrtoend
+  lda #$1B  ; ESC
+  jsr puta
+  lda #$5B  ; [
+  jsr puta
+  lda #$30  ; 0
+  jsr puta
+  lda #$4A  ; J
+  jsr puta
+  rts
+
+;; move cursor to current position (stored in row/col).
+moveto
+  lda #$1B ; ESC
+  jsr puta
+  lda #$5B ; [
+  jsr puta
+  lda row  ; row
+  inc
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr puta
+  lda col  ; col
+  inc
+  jsr todecimal
+  lda #$48  ; H
+  jsr puta
+  rts
+
+;; add a "+" marker at 65,17 to mark the extent of edit
+;; edit region for forth words (16 rows x 64 chars).
+addmarker
+  lda #$1B ; ESC
+  jsr puta
+  lda #$5B ; [
+  jsr puta
+  lda #17
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr puta
+  lda #65
+  jsr todecimal
+  lda #$48  ; H
+  jsr puta
+  lda #$2b  ; +
+  jsr puta
+  rts
+
+nextch
+.(
+  lda row
+  cmp #MAXROW ; #$13
+  beq donothing
+  inc row
+.(
+  clc
+  lda rowbase
+  adc #NCOLS ; #$40
+  sta rowbase
+  bcc doneadd
+  inc rowbase+1
+doneadd
+.)
+ jsr moveto
+donothing
+ jmp editloop
+.)
+
+prev
+.(
+  lda row
+  beq donothing
+  dec row
+  sec
+  lda rowbase
+  sbc #NCOLS ; #$40
+  sta rowbase
+  lda rowbase+1
+  sbc #$00
+  sta rowbase+1
+  jsr moveto
+donothing
+  jmp editloop
+.)
+
+back
+.(
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
+donothing
+ jmp editloop
+.)
+
+forw
+.(
+  lda col
+  cmp #MAXCOL ; #$3F
+  beq donothing
+  inc col
+  jsr moveto
+donothing
+ jmp editloop
+.)
+
+tostart
+  stz col
+  jsr moveto
+  jmp editloop
+
+toend
+.(
+  ldy #$00
+endloop
+  lda (rowbase),y
+  beq atend
+  iny
+  cpy #MAXCOL ;#$3F
+  beq atend
+  bra endloop
+atend
+  sty col
+  jsr moveto
+  jmp editloop
+.)
+
+delfwd
+.(
+  ldy     col
+delloop
+  iny
+  lda     (rowbase),y
+  dey
+  sta     (rowbase),y
+  jsr     puta
+  beq     done
+  iny
+  bra   delloop
+done
+  lda     #$20
+  jsr     puta
+  jsr     moveto
+  jmp     editloop
+.)
+
+delback
+.(
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
+  jmp delfwd
+donothing
+  jmp editloop
+.)
+
+insert
+  pha
+  ldy col
+  lda (rowbase),y
+  bne notatend
+inschar
+  pla
+  sta (rowbase),y
+  jsr puta
+  inc col
+  jsr moveto
+  rts
+
+notatend
+  phy
+  inc col
+  jsr moveto
+  dec col
+  ply
+  ;; move the rest of the line right by one character
+  lda (rowbase),y
+insloop
+  iny
+  pha
+  lda (rowbase),y
+  tax
+  pla
+  sta (rowbase),y
+  jsr puta
+  txa
+  bne insloop
+  iny
+  sta (rowbase),y
+  jsr moveto
+  ldy col
+  bra inschar
+  lda row
+  cmp #MAXROW
+  bne newline
+  jmp editloop
+
+newline
+  ldy col           ; are we at the end of a line?
+  lda (rowbase),y
+  beq atend         ; if yes
+  jmp  breakline    ; if no
+
+atend
+.(
+  clc               ; reset rowbase to the new line
+  lda rowbase
+  adc #NCOLS
+  sta rowbase
+  bcc doneadd
+  inc rowbase+1
+doneadd        
+.)
+  lda (rowbase)      ; is this next line empty?
+  bne movelines      ; no, so move lines to insert a new one
+  inc row            ; yes, so move to it
+  stz col
+  jsr moveto
+  jmp editloop
+
+movelines
+  ;; move the rest of the text down by one line
+  jsr rippledown
+
+  ;; clear data out of this line
+  ldy #MAXCOL
+  lda #0
+.(
+clearloop
+  sta (rowbase),y
+  dey
+  bne clearloop
+  sta (rowbase)
+.)
+
+  ;; now that the data is in the right place, repaint the screen
+  ;; first, clear everything below the current row
+  jsr clrtoend
+  inc row           ; we haven't done that yet
+  jsr moveto
+
+  ;; stash the row count
+  lda row
+  pha
+
+  ;; now, paint rows that remain
+  clc
+  lda rowbase
+  adc #NCOLS
+  sta lower
+  lda rowbase+1
+  adc #$00
+  sta lower+1
+  stz col
+
+paintnext
+  lda row
+  inc
+  cmp #NROWS
+  beq donerepaint
+  sta row
+  stz col
+  jsr moveto
+  jsr paintrow
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  bcc paintnext
+  inc lower+1
+  bra paintnext
+
+donerepaint
+  pla
+  sta row
+  jsr addmarker
+  jsr moveto
+
+finish
+  jmp editloop
+
+breakline ;; BUG   TO BE IMPLEMENTED
+  jmp editloop
+
+
+;; output the text for one row, pointed to by lower. do it
+;; directly for faster output without the subroutine call.
+paintrow
+.(
+  phy
+  ldy #0
+rdyloop
+  lda ACIA_STATUS
+  and #$10
+  beq rdyloop
+  lda (lower),y
+  beq done
+  sta ACIA_DATA
+  iny
+  cpy #MAXCOL
+  beq done
+  bra rdyloop
+done
+  ply
+  rts
+.)
+
+;;; clear below and print from current row to the bottom of
+;;; of the screen. (uses rowbase to point to line)
+paintdown
+.(
+  lda rowbase
+  sta lower
+  lda rowbase+1
+  sta lower+1
+  lda row
+  pha               ; stash the row count
+  lda col
+  pha               ; stash the column count
+  stz col
+paintloop
+  jsr moveto
+  jsr clrtoend
+  jsr paintrow
+  lda row
+  inc
+  cmp #NROWS
+  beq endpaint
+  sta row
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  lda lower+1
+  adc #0
+  sta lower+1
+  bra paintloop
+endpaint
+  pla
+  sta col
+  pla
+  sta row
+  jsr addmarker
+  jsr moveto
+  rts
+.)
+
+
+;;; repaint the whole screen, saving and then restoring cursor position
+;;;
+repaint
+  lda row
+  pha
+  lda col
+  pha
+  lda rowbase
+  pha
+  lda rowbase+1
+  pha
+  stz row
+  stz col
+  lda TEXTBASE
+  sta rowbase
+  lda TEXTBASE+1
+  sta rowbase+1
+  jsr cls
+  jsr home
+  jsr paintdown
+  jsr addmarker
+  pla
+  sta rowbase+1
+  pla
+  sta rowbase
+  pla
+  sta col
+  pla
+  sta row
+  jsr addmarker
+  jsr moveto
+  jmp editloop
+
+
+;;; open a new line
+openline
+.(
+  ldy col
+  bne midline
+  jsr rippledown
+  ldy #0
+  lda #0
+clearloop
+  sta (rowbase),y
+  iny
+  cpy #MAXCOL
+  bne clearloop
+  jsr paintdown
+  jmp editloop
+
+midline
+  ;; BUG still to be implemented
+  jmp editloop
+.)
+
+;;; move lines down to open up a space. starts from the last line and
+;;; works its way down to the current row (rowbase).
+rippledown
+.(
+  ;; find the end of the text area by adding textsize to textbase
+  clc
+  lda TEXTBASE
+  adc #<TEXTSIZE
+  sta upper
+  lda TEXTBASE+1
+  adc #>TEXTSIZE
+  sta upper+1
+
+  ;; subtract one line length to get the last line in area
+  sec
+  lda upper
+  sbc #NCOLS
+  sta upper
+  lda upper+1
+  sbc #$00
+  sta upper+1
+
+  ;; is that the row we're on now?
+  lda upper
+  cmp rowbase
+  bne continue
+  lda upper+1
+  cmp rowbase+1
+  bne continue
+  jmp finish        ;  yes so we are done
+
+continue
+  ;; substract one more line length and store in lower
+  sec
+  lda upper
+  sbc #$40
+  sta lower
+  lda upper+1
+  sbc #$00
+  sta lower+1
+
+  ;; at this point, we have two pointers, lower and upper,
+  ;; which point to two adjacent lines at the end of the buffer.
+  ;; we want to reapeatedly copy the contents of lower into
+  ;; upper. We do this backwards from the end of the buffer
+  ;; so that we are preserving text as it ripples down.
+linecopy
+  ldy #MAXCOL
+charcopy
+  lda (lower),y
+  sta (upper),y
+  dey
+  bne charcopy
+  lda (lower)   ; copy the last character
+  sta (upper)
+
+  sec           ; lower line now becomes upper line
+  lda lower     ; and lower moves down by one line
+  sta upper
+  sbc #NCOLS
+  sta lower
+  lda lower+1
+  sta upper+1
+  sbc #$00
+  sta lower+1
+
+  lda upper      ; stop when upper hits the new line we're at
+  cmp rowbase
+  bne linecopy
+  lda upper+1
+  cmp rowbase+1
+  bne linecopy
+.)
+  rts
+
+;;; move lines up when one line is deleted. starts from rowbase (row
+;;; being deleted) up to the end
+rippleup
+.(
+  clc
+  lda rowbase
+  sta lower         ; set lower to be same as rowbase
+  adc #NCOLS        ; and upper to be one row later
+  sta upper
+  lda rowbase+1
+  sta lower+1
+  adc #0
+  sta upper+1
+
+  clc               ; calculate limit for copying
+  lda TEXTBASE
+  adc #<TEXTSIZE
+  sta jmpvec        ; weird, but just temporary
+  lda TEXTBASE+1
+  adc #>TEXTSIZE
+  sta jmpvec+1
+
+copyrow
+  ldy #0
+.(
+charloop
+  lda (upper),y
+  sta (lower),y
+  cpy #MAXCOL
+  beq endofline
+  iny
+  bra charloop
+.)
+endofline
+
+  clc               ; move upper to lower, and increment upper
+  lda upper         ; by one row
+  sta lower
+  adc #NCOLS
+  sta upper
+  lda upper+1
+  sta lower+1
+  adc #0
+  sta upper+1
+
+  lda upper
+  cmp jmpvec
+  bne copyrow
+  lda upper+1
+  cmp jmpvec+1
+  bne copyrow
+  ;; now clear out that last line (now lower)
+  ldy #0
+  lda #0
+loop
+  sta (lower),y
+  cpy #MAXCOL
+  beq done
+  iny
+  bra loop  
+done
+.)
+  rts
+
+
+;;; delete line (^K) -- clears the line when there is text, and close
+;;; up the line if it's empty.
+delline
+  ldy col           ; are we at the start of the line?
+  bne midline       ; no
+
+  lda (rowbase),y   ; is the line empty?
+  beq closeline     ; yes, so close it up
+
+  ;; delete contents of this line (and erase with spaces)
+  ldy #0
+.(
+clearloop
+  lda (rowbase),y
+  beq endofline
+  lda #0
+  sta (rowbase),y
+  lda #32
+  jsr puta
+  cpy #MAXCOL
+  beq endofline
+  iny
+  bra clearloop
+endofline
+  jsr moveto
+  jmp editloop
+.)
+
+closeline
+  jsr rippleup
+  jsr paintdown
+  jmp editloop
+
+midline
+  ;; still to be implemented
+  jmp editloop
+
+
+;; move to bottom of the screen and quit via rts (back to doedit).
+;; in an ugly hack, convert nulls to spaces on exit
+endedit
+  jsr nulltospace
+  lda #$12
+  sta row
+  stz col
+  jsr moveto
+  rts
+
+getchar
+  lda ACIA_STATUS
+  and #$08
+  beq getchar
+  lda ACIA_DATA
+  rts
+
+undefined
+  lda #$07          ; BEL (but it doesn't do anything)
+  jsr puta
+  jmp editloop
+
+
+;; convert nulls to spaces in the buffer and add newlines
+nulltospace
+.(
+  lda #NROWS
+  sta count
+  lda TEXTBASE
+  sta lower
+  lda TEXTBASE+1
+  sta lower+1
+
+outerloop
+  ldy #63
+innerloop
+  lda (lower),y
+  cmp #32
+  beq moveback
+  cmp #0
+  bne foundit
+  lda #32
+  sta (lower),y
+  bra moveback
+foundit
+  iny
+  lda #10
+  sta (lower),y
+  bra nextline
+moveback
+  dey
+  cpy #255          ; wrapped around?
+  bne innerloop
+  lda #10
+  sta (lower)
+nextline
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  bcc doneadd
+  inc lower+1
+doneadd
+  dec count
+  lda count
+  bne outerloop
+  rts
+.)
+
+  
+
+
+
+;;;
+;;; *** USER I/O SUPPORT ROUTINES
+;;;
+
+puta
+.(
+  pha
+  lda #$10
+wait_txd_empty
+  bit ACIA_STATUS
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+crlf
+  lda #13
+  jsr puta
+  lda #10
+  jsr puta
+  rts
+
+
+
+;;;
+;;; *** STRING CONSTANTS
+;;;
+
+
+ok:		 .byte "  OK", $0d, $0a, $00
+dots:		 .byte "   ...", $0d, $0a, $00
+notdefinedmsg:   .byte ": not defined", $00
+nestingmsg:	 .byte "  nesting mismatch", $00
+compileerr:      .byte "  compile-only word", $00
+exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
+;timeoutmsg:      .byte " timeout", $0d, $0a, $00
+cardfailmsg:     .byte " couldn't initialize card", $00
+initializedmsg:  .byte " initialized ", $00
+usingerrormsg:   .byte " not USING block file", $00
+diskerrormsg:    .byte " disk error", $00
+nodiskmsg:       .byte " no disk present", $00
+;readerrormsg:    .byte " read error", $0d, $0a, $00
+;writeerrormsg:   .byte " write error", $0d, $0a, $00
+dirofmsg:        .byte "Directory of ", $00
+nofilemsg:       .byte " no such file", $00
+blockcountmsg:   .byte " exceeds file block count", $00
+generic:	 .byte " generic error",$00
+existserr:	 .byte " file exists",$00
+bytesfree:       .byte " bytes free", $00
+hextable:	 .byte "0123456789ABCDEF"
