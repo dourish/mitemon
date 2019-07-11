@@ -1,20 +1,39 @@
 ;;;
-;;; standalone file uploader. receives a file via xmodem and stores
-;;; it as the file named on the command line.
+;;; Standalone file uploader. Receives a file via xmodem and stores
+;;; it as the file named on the command line. Since it's XMODEM, it only
+;;; processes data in 128 byte chunks, and may pad out the file with $1A.
 ;;;
 
 * = $0300
+
 PRINTVEC=$0042
 INPUT=$7F00
 SCRATCH=$0010
+CURSEC=$0068
 WORD=$7EC0
+
+XBLOCKNO    = $0030
+XBLOCKINV   = $0031
+XBLOCKCOUNT = $0032
+XCHKSUM     = $0033
+XDESTADDR   = $0034 ; and $0035
+BUFFER      = $0036 ; and $0037
+
+XBUFFER     = $4000
+XSENTINEL   = $4200
 
 printstacksub=$d20c
 newfilesub=$e9d5
 finddirword=$e8a1
+sdsavegen=$e2bf
+sdsavebuf=$e1c4
 
   jmp start
 
+CLUSTER .word 0
+COUNT   .word 0
+
+#include "../decl.a65"
 #include "../stack.a65"
 #include "jmptable.a65"
 
@@ -97,42 +116,79 @@ continue
   ;; to the directory entry within it
   ;; so the cluster number is at ptr + 26,27
 
-  ; get cluster #, cache it at SCRATCH+2/3 -- or do i need a sector?
+  ; get cluster #, cache it
   lda stackbase+1,x
   sta SCRATCH
   lda stackbase+2,x
   sta SCRATCH+1
   ldy #26
   lda (SCRATCH),y
-  sta SCRATCH+2
+  sta CLUSTER
   iny
   lda (SCRATCH),y
-  sta SCRATCH+3
+  sta CLUSTER+1
 
-  ; set counter to 0 (counter at SCRATCH+4/5)
-  stz SCRATCH+4
-  stz SCRATCH+5
+  lda #"c
+  jsr ROMPUTA
+  lda CLUSTER+1
+  jsr putax
+  lda CLUSTER
+  jsr putax
+
+  ; set counter to 0 (counts bytes written out)
+  stz COUNT
+  stz COUNT+1
 
   ;; end for now
+  jsr crlf
   jsr printstacksub
-  rts
+  jsr crlf
+;  rts
 
-  ; set pointer to start of buffer (pointer at SCRATCH+6/7)
+  ; set pointer to start of buffer
+  lda #<XBUFFER
+  sta XDESTADDR
+  lda #>XBUFFER
+  sta XDESTADDR+1
 
+  ;; I'm about to trash LBLOCK, so make sure we don't think
+  ;; it represents any of the disk
+  stz CURSEC
+  stz CURSEC+1
+  stz CURSEC+2
+  stz CURSEC+3
 
-
-  ; get a block via xmodem
-  ; last block? erase trailing padding
-
-  ; copy data to buffer
-  ; buffer full? flush to file, reset pointer
-  ; update counter
-  ; last block? leave loop
-  ; else loop for next block
+  jsr xmodemrecv
 
   ; set file length to counter
+  ;; first, reload directory entry
+  jsr finddirword
+  jsr crlf
+  jsr printstacksub
+  jsr crlf
+  ;; then update file length
+  lda 1,x
+  sta SCRATCH
+  lda 2,x
+  sta SCRATCH+1
+  ldy #28
+  lda COUNT
+  sta (SCRATCH),y
+  iny
+  lda COUNT+1
+  sta (SCRATCH),y
 
+  ;; remove pointer from the stack, leaving sector number
+  inx
+  inx
 
+  ;; flush the directory block, removing sector number from stack
+  jsr sdsavebuf
+
+  jsr printstacksub
+  jsr crlf
+  ; finish
+  rts
 
 nameerrstr .byte "Usage: upload filename", $0a, $0d, $00
 fileerrstr .byte "Error: file already exists", $0a, $0d, $00
@@ -140,17 +196,9 @@ fileerrstr .byte "Error: file already exists", $0a, $0d, $00
 
 
 
-XBLOCKNO    = $0030
-XBLOCKINV   = $0031
-XBLOCKCOUNT = $0032
-XCHKSUM     = $0033
-XDESTADDR   = $0034 ; and $0035
-BUFFER      = $0036 ; and $0037
-
-
-
-;; entry point
-;;
+;;; entry point for xmodem code, which is basically lifted from
+;;; the implementation in the monitor.
+;;;
 xmodemrecv
   ;; first, print a message announcing that we're listening
   lda #<startstr
@@ -162,8 +210,6 @@ xmodemrecv
   phx               ; preserve operand stack pointer
 
   stz XBLOCKCOUNT
-  ldy #$0
-  ldx #0
 
   ;; okay, now we wait for transmission to start. the deal here is that
   ;; we are meant to listen with 10-second timeouts, and sent a NACK
@@ -189,7 +235,7 @@ bumpy
 sendnack
   ;; send a nack
   lda #$15
-  jsr puta
+  jsr ROMPUTA
   bra wait_rxd_full
 .)
 gotfirstchar
@@ -201,7 +247,9 @@ nextblock
 processbuffer
   jsr getserial     ; get first character (if we don't already have it)
   cmp #$04          ; end-of-transmission?
-  beq endoftransmission
+  bne stillgoing
+  jmp endoftransmission
+stillgoing
   cmp #$01          ; start-of-header?
   beq processblock
   jsr headererror
@@ -253,7 +301,7 @@ endofblock
 checksumok
   ;; send an ACK
   lda #$06
-  jsr puta
+  jsr ROMPUTA
 
   ;; update the destination address by 128 ($80)
   lda #$80
@@ -263,17 +311,134 @@ checksumok
   lda XDESTADDR+1
   adc #0
   sta XDESTADDR+1
-  ;; and loop for next block
 
-  bra nextblock
+  ;; have we filled the input buffer? if so, flush it to disk and
+  ;; reset the pointer to the start
+  ;; sdsavegen requires four 16-bit values on the stack:
+  ;;   ( address count cluster offset -- )
+  ;; address is LBLOCK, count is 512, cluster is same as ever, and offset
+  ;; is the current count of written-out bytes
 
-;; Send an ACK. Pause briefly to allow the connection to be torn down.
-;; Then print a message to signal successful completion.
+  lda XDESTADDR
+  cmp #<XSENTINEL
+  bne proceed
+  lda XDESTADDR+1
+  cmp #>XSENTINEL
+  bne proceed
+
+  plx               ; restore operand stack pointer
+
+  ;; set up stack for save
+  dex               ; first, the address parameter
+  dex
+  lda #<XBUFFER
+  sta 1,x
+  lda #>XBUFFER
+  sta 2,x
+  dex               ; second, the count parameter
+  dex
+  lda #0
+  sta 1,x
+  lda #$2
+  sta 2,x
+  dex               ; third, the cluster parameter
+  dex
+  lda CLUSTER
+  sta 1,x
+  lda CLUSTER+1
+  sta 2,x
+  dex               ; fourth, the offset parameter
+  dex
+  lda COUNT
+  sta 1,x
+  lda COUNT+1
+  sta 2,x
+
+  ;; do the save
+  jsr sdsavegen
+
+  ;; then update the count of written-out bytes (by 512)
+  clc
+  lda COUNT+1
+  adc #$2
+  sta COUNT+1
+
+  ;; reset pointer
+  lda #<XBUFFER
+  sta XDESTADDR
+  lda #>XBUFFER
+  sta XDESTADDR+1
+
+  phx               ; save operand stack pointer
+  ldy #0            ; reset Y
+
+proceed
+  jmp nextblock     ; loop to read next block
+
+
+;; End of transmission. Send an ACK, and flush any remaining input.
+;; Pause briefly to allow the connection to be torn down, then
+;; print a message to signal successful completion.
 endoftransmission
   ;; send an ACK
   lda #$06
-  jsr puta
+  jsr ROMPUTA
 
+  ;; if we are pointing to the start of the LBLOCK, there is no more
+  ;; data. otherwise, process any remaining data.
+  lda XDESTADDR
+  cmp #<XBUFFER
+  bne finalize
+  lda XDESTADDR+1
+  cmp #>XBUFFER
+  beq finish
+
+finalize
+  plx               ; restore the operand stack pointer
+
+  ;; there is data still to write out. set up stack for save.
+  dex               ; first, the address parameter
+  dex
+  lda #<XBUFFER
+  sta 1,x
+  lda #>XBUFFER
+  sta 2,x
+  dex               ; second, the count parameter (XDESTADDR minus XBUFFER)
+  dex
+  sec
+  lda XDESTADDR
+  sbc #<XBUFFER
+  sta 1,x
+  lda XDESTADDR+1
+  sbc #>XBUFFER
+  sta 2,x
+  dex               ; third, the cluster parameter
+  dex
+  lda CLUSTER
+  sta 1,x
+  lda CLUSTER+1
+  sta 2,x
+  dex               ; fourth, the offset parameter
+  dex
+  lda COUNT
+  sta 1,x
+  lda COUNT+1
+  sta 2,x
+
+  ;; before we do the save and lose the stack, update the count parameter
+  clc
+  lda COUNT
+  adc 5,x
+  sta COUNT
+  lda COUNT+1
+  adc 6,x
+  sta COUNT+1
+
+  ;; do the save
+  jsr sdsavegen
+  phx               ; save the operand stack pointer
+
+finish
 .(
   ;; this is just to generate a pause. entirely arbitrary.
   ;; (had to make this longer after i upped the clock speed)
@@ -292,29 +457,21 @@ busywait
 .)  
 
   jsr crlf
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda recvdstr,y
-  beq endstr
-  sta ACIA_DATA
-  iny
-  bra next_char
-endstr
-  jsr crlf
-.)
+
+  lda #<recvdstr
+  sta PRINTVEC
+  lda #>recvdstr
+  sta PRINTVEC+1
+  jsr ROMPRTSTR
+
   jmp endxmodem
 
 xmerror
 
 endxmodem
   plx               ; restore operand stack pointer in x
+;  jsr printstacksub
   rts
-.)
 
 
 ;; get a character from the serial port
@@ -385,8 +542,51 @@ endstr
   rts
 
 
-startstr:   .byte "xmodem listening", $00
-recvdstr:   .byte "xmodem received", $00
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+
+crlf
+  lda #13
+  jsr ROMPUTA
+  lda #10
+  jsr ROMPUTA
+  rts
+
+
+startstr:   .byte "xmodem listening", $0d, $0a, $00
+recvdstr:   .byte "xmodem received", $0d, $0a, $00
 blockerrstr:.byte "block count error", $00
 chksmerrstr:.byte "checksum errror", $00
 headerrstr: .byte "header error", $00
+hextable:   .byte "0123456789ABCDEF"
