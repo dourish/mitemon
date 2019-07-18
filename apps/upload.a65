@@ -6,12 +6,14 @@
 
 * = $0300
 
+;;; these variables are imported from the monitor/FORTH
 PRINTVEC=$0042
 INPUT=$7F00
 SCRATCH=$0010
 CURSEC=$0068
 WORD=$7EC0
 
+;;; these variables, for XMODEM, are the same as monitor/FORTH
 XBLOCKNO    = $0030
 XBLOCKINV   = $0031
 XBLOCKCOUNT = $0032
@@ -22,23 +24,23 @@ BUFFER      = $0036 ; and $0037
 XBUFFER     = $4000
 XSENTINEL   = $4200
 
-printstacksub=$d20c
-newfilesub=$e9d5
-finddirword=$e8a1
-sdsavegen=$e2bf
-sdsavebuf=$e1c4
+;;; entry points for some ROM functions. TO DO -- migrate into jump table
+sdsavebuf=$e1d0
 
   jmp start
 
-CLUSTER .word 0
-COUNT   .word 0
+CLUSTER  .word 0
+FILEPOSN .word 0
 
 #include "../decl.a65"
 #include "../stack.a65"
 #include "jmptable.a65"
 
+DEBUG=$5000
 
 start
+  stz DEBUG
+
   ;; extract the filename from the command line, and copy it into
   ;; WORD as a counted string
 
@@ -79,6 +81,8 @@ donecopy
   bra nextstep
 
 nameerror
+  ;; there's been some problem finding the name, so
+  ;; report an error and quit.
   lda #<nameerrstr
   sta PRINTVEC
   lda #>nameerrstr
@@ -87,34 +91,59 @@ nameerror
   rts
 
 nextstep
-  ; lookup directory
-  jsr finddirword
-  bcs continue
-  ; entry present-> failure
+  ;; look up the filename in the dictionary.
+  clc
+  jsr ROMFINDDIRW
+  bcs newfile
+
+  ;; the file exists. check if the user wants to overwrite it.
+
 fileerror
-  lda #<fileerrstr
+  lda #<replacestr
   sta PRINTVEC
-  lda #>fileerrstr
+  lda #>replacestr
   sta PRINTVEC+1
   jsr ROMPRTSTR
-  rts
-continue
+  jsr ROMGET
+  jsr ROMPUTA       ; echo the character
+  cmp #"y
+  beq okay
+  cmp #"Y
+  beq okay
 
-  ; make entry
-  ; .. which means to put filename as c-string on the stack
-  ; .. then jsr newfilesub
+  ;; any other input that Y/y means no, so quit.
+  jsr crlf
+  rts
+
+okay
+  ;; user entered yes, so proceed.
+  jsr crlf
+  bra filesetup
+
+newfile
+  ;; the named file does not exist, so make a new file with that name
+  ;; .. which means to put filename as c-string on the stack
+  ;; .. then jsr newfilesub
   dex
   dex
   lda #<WORD
   sta stackbase+1,x
   lda #>WORD
   sta stackbase+2,x
-  jsr newfilesub
+  jsr ROMNEWFILE
 
-  ;; at this point, the directory sector is in the LBLOCK/HBLOCK area,
-  ;; and the stack has the double-precision sector number and a pointer
-  ;; to the directory entry within it
+  lda #<createmsg
+  sta PRINTVEC
+  lda #>createmsg
+  sta PRINTVEC+1
+  jsr ROMPRTSTR
+
+filesetup
+  ;; at this point, the file is set up. the directory sector is in
+  ;; the LBLOCK/HBLOCK area, and the stack has the double-precision
+  ;; sector number and a pointer to the directory entry within it
   ;; so the cluster number is at ptr + 26,27
+  ;; CHECK HAS THE DIRECTORY SECTOR BEEN SAVED YET???
 
   ; get cluster #, cache it
   lda stackbase+1,x
@@ -128,24 +157,23 @@ continue
   lda (SCRATCH),y
   sta CLUSTER+1
 
-  lda #"c
-  jsr ROMPUTA
-  lda CLUSTER+1
-  jsr putax
-  lda CLUSTER
-  jsr putax
+;  lda #"c
+;  jsr ROMPUTA
+;  lda CLUSTER+1
+;  jsr putax
+;  lda CLUSTER
+;  jsr putax
 
-  ; set counter to 0 (counts bytes written out)
-  stz COUNT
-  stz COUNT+1
+  ; set file position
+  stz FILEPOSN
+  stz FILEPOSN+1
 
-  ;; end for now
-  jsr crlf
-  jsr printstacksub
-  jsr crlf
-;  rts
+  ;; some debugging information
+;  jsr crlf
+;  jsr ROMPRTSTCK
+;  jsr crlf
 
-  ; set pointer to start of buffer
+  ;; set xmodem data pointer to start of buffer
   lda #<XBUFFER
   sta XDESTADDR
   lda #>XBUFFER
@@ -160,22 +188,20 @@ continue
 
   jsr xmodemrecv
 
-  ; set file length to counter
-  ;; first, reload directory entry
-  jsr finddirword
-  jsr crlf
-  jsr printstacksub
-  jsr crlf
-  ;; then update file length
-  lda 1,x
+  ;; set file length to current file position
+  jsr ROMFINDDIRW   ; first, reload directory entry
+;  jsr crlf          ; debugging information
+;  jsr ROMPRTSTCK
+;  jsr crlf
+  lda 1,x           ; now update file length. Get pointer into SCRATCH.
   sta SCRATCH
   lda 2,x
   sta SCRATCH+1
-  ldy #28
-  lda COUNT
+  ldy #28           ; data is at #28 and #29
+  lda FILEPOSN
   sta (SCRATCH),y
   iny
-  lda COUNT+1
+  lda FILEPOSN+1
   sta (SCRATCH),y
 
   ;; remove pointer from the stack, leaving sector number
@@ -185,14 +211,16 @@ continue
   ;; flush the directory block, removing sector number from stack
   jsr sdsavebuf
 
-  jsr printstacksub
-  jsr crlf
-  ; finish
+;  jsr ROMPRTSTCK    ; debugging
+;  jsr crlf
+
+  ;; finish
   rts
 
 nameerrstr .byte "Usage: upload filename", $0a, $0d, $00
 fileerrstr .byte "Error: file already exists", $0a, $0d, $00
-
+replacestr .byte "Replace existing file? ", $00
+createmsg  .byte "Creating new file", $0a, $0d, $00
 
 
 
@@ -253,9 +281,13 @@ stillgoing
   cmp #$01          ; start-of-header?
   beq processblock
   jsr headererror
+  lda #$01
+  sta DEBUG
   jmp xmerror
 
 processblock
+  stz DEBUG
+
   ;; get block number and inverse block number
   jsr getserial
   sta XBLOCKNO
@@ -267,6 +299,8 @@ processblock
   cmp XBLOCKINV     ; does block number match inverse block number?
   beq checkblockcount
   jsr blockcounterror
+  lda #$02
+  sta DEBUG
   jmp xmerror
 
 checkblockcount
@@ -275,6 +309,8 @@ checkblockcount
   cmp XBLOCKNO      ; does it match what we were expecting?
   beq processdata
   jsr blockcounterror
+  lda #$03
+  sta DEBUG
   jmp xmerror
 
 processdata
@@ -293,15 +329,15 @@ endofblock
   jsr getserial
   cmp XCHKSUM
   beq checksumok
-  jsr putax
-  lda XCHKSUM
-  jsr putax
+;  jsr putax
+;  lda XCHKSUM
+;  jsr putax
   jsr checksumerror
+  lda #$04
+  sta DEBUG
   jmp xmerror
+
 checksumok
-  ;; send an ACK
-  lda #$06
-  jsr ROMPUTA
 
   ;; update the destination address by 128 ($80)
   lda #$80
@@ -328,40 +364,46 @@ checksumok
 
   plx               ; restore operand stack pointer
 
+  lda #$05
+  sta DEBUG
+
   ;; set up stack for save
-  dex               ; first, the address parameter
+  dex               ; first, the address of the data to save
   dex
   lda #<XBUFFER
   sta 1,x
   lda #>XBUFFER
   sta 2,x
-  dex               ; second, the count parameter
+  dex               ; second, the number of bytes to write
   dex
   lda #0
   sta 1,x
   lda #$2
   sta 2,x
-  dex               ; third, the cluster parameter
+  dex               ; third, the cluster where we write data
   dex
   lda CLUSTER
   sta 1,x
   lda CLUSTER+1
   sta 2,x
-  dex               ; fourth, the offset parameter
+  dex               ; fourth, the location within the cluster
   dex
-  lda COUNT
+  lda FILEPOSN
   sta 1,x
-  lda COUNT+1
+  lda FILEPOSN+1
   sta 2,x
 
   ;; do the save
-  jsr sdsavegen
+  jsr ROMSAVEMEM
 
-  ;; then update the count of written-out bytes (by 512)
+  lda #$06
+  sta DEBUG
+
+  ;; then update the file position by 512 bytes
   clc
-  lda COUNT+1
+  lda FILEPOSN+1
   adc #$2
-  sta COUNT+1
+  sta FILEPOSN+1
 
   ;; reset pointer
   lda #<XBUFFER
@@ -373,6 +415,10 @@ checksumok
   ldy #0            ; reset Y
 
 proceed
+  ;; send an ACK
+  lda #$06
+  jsr ROMPUTA
+
   jmp nextblock     ; loop to read next block
 
 
@@ -383,6 +429,9 @@ endoftransmission
   ;; send an ACK
   lda #$06
   jsr ROMPUTA
+
+  lda #$08
+  sta DEBUG
 
   ;; if we are pointing to the start of the LBLOCK, there is no more
   ;; data. otherwise, process any remaining data.
@@ -420,22 +469,22 @@ finalize
   sta 2,x
   dex               ; fourth, the offset parameter
   dex
-  lda COUNT
+  lda FILEPOSN
   sta 1,x
-  lda COUNT+1
+  lda FILEPOSN+1
   sta 2,x
 
-  ;; before we do the save and lose the stack, update the count parameter
+  ;; before we do the save and lose the stack, update the file position
   clc
-  lda COUNT
+  lda FILEPOSN
   adc 5,x
-  sta COUNT
-  lda COUNT+1
+  sta FILEPOSN
+  lda FILEPOSN+1
   adc 6,x
-  sta COUNT+1
+  sta FILEPOSN+1
 
   ;; do the save
-  jsr sdsavegen
+  jsr ROMSAVEMEM
   phx               ; save the operand stack pointer
 
 finish
@@ -470,7 +519,7 @@ xmerror
 
 endxmodem
   plx               ; restore operand stack pointer in x
-;  jsr printstacksub
+;  jsr ROMPRTSTCK
   rts
 
 
@@ -488,60 +537,31 @@ wait_rxd_full
 
 
 checksumerror
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda chksmerrstr,y
-  beq endstr
-  sta ACIA_DATA
-  iny
-  bra next_char
-endstr
-  jsr crlf
-.)
+  lda #<chksmerrstr
+  sta PRINTVEC
+  lda #>chksmerrstr
+  sta PRINTVEC+1
+;  jsr ROMPRTSTR
   rts
 
 headererror
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda headerrstr,y
-  beq endstr
-  sta ACIA_DATA
-  iny
-  bra next_char
-endstr
-  jsr crlf
-.)
+  lda #<headerrstr
+  sta PRINTVEC
+  lda #>headerrstr
+  sta PRINTVEC+1
+;  jsr ROMPRTSTR
   rts
 
 blockcounterror
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda blockerrstr,y
-  beq endstr
-  sta ACIA_DATA
-  iny
-  bra next_char
-endstr
-  jsr crlf
-.)
+  lda #<blockerrstr
+  sta PRINTVEC
+  lda #>blockerrstr
+  sta PRINTVEC+1
+;  jsr ROMPRTSTR
   rts
 
 
+#if 0
 putax
 .(
   phy
@@ -575,6 +595,7 @@ wait_txd_empty2
 .)
   ply
   rts
+#endif
 
 crlf
   lda #13
@@ -586,7 +607,7 @@ crlf
 
 startstr:   .byte "xmodem listening", $0d, $0a, $00
 recvdstr:   .byte "xmodem received", $0d, $0a, $00
-blockerrstr:.byte "block count error", $00
-chksmerrstr:.byte "checksum errror", $00
-headerrstr: .byte "header error", $00
+blockerrstr:.byte "block count error", $0a, $0d, $00
+chksmerrstr:.byte "checksum errror", $0a, $0d, $00
+headerrstr: .byte "header error", $0a, $0d, $00
 hextable:   .byte "0123456789ABCDEF"
