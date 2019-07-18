@@ -1,0 +1,641 @@
+;;;
+;;; Standalone text editor. It's based on the editor in SECND but with
+;;; a very different data structure and an expectation of a 80x24 screen.
+;;;
+
+* = $0300
+
+  jmp start
+
+;;; these variables are imported from the monitor/FORTH
+PRINTVEC=$0042
+INPUT=$7F00
+SCRATCH=$0010
+CURSEC=$0068
+WORD=$7EC0
+LBLOCK=$7C00
+HBLOCK=$7D00
+
+;;; Data structures/Rationale
+;;;
+;;; Text data is held in a doubly-linked list of lines. Each is 84 bytes
+;;; long; two bytes of forward pointer, two bytes of backwards pointer,
+;;; and 80 bytes of character data. I use the term "lines" to refer to
+;;; these data structures, and "row" and "column" to refer to screen
+;;; space. The line data structures are allocatd in an area from DATASTART
+;;; to DATAEND. NEXTFREE points to the next available space. FIRSTLINE
+;;; and LASTLINE indicate the first and last lines of the text file.
+;;;
+DATASTART=$4000     ; base of data storage area
+DATAEND=$7C00       ; end of data storage
+
+;;; the $0070 area is used by FORTH but not for anything that might run
+;;; while the editor is running, so is safe to reuse.
+NEXTFREE=$0070 ; and 0071 -- address of next free line structure
+LASTLINE=$0072 ; and 0073 -- address of final line structure
+CURLINE=$0074  ; and 0075 
+CURDATA=$0076  ; and 0077
+BUFPTR=$0078   ; and 0079
+DATAPTR=$007A  ; and 007B
+
+CLUSTER  .word 0
+FILELEN  .word 0
+         .word 0
+SECTOR   .word 0
+         .word 0
+MAXBUF   .byte 0
+MAXDATA  .byte 0
+
+
+#include "../decl.a65"
+#include "../stack.a65"
+#include "jmptable.a65"
+
+
+start
+
+  ;; extract the filename from the command line, and copy it into
+  ;; WORD as a counted string
+  jsr p1toword
+  bcc checkfile
+  rts
+
+checkfile
+  ;; look up the filename in the dictionary.
+  clc
+  jsr ROMFINDDIRW
+  bcc fileready     ; when file already exists
+
+newfile
+  ;; the named file does not exist, so make a new file with that name
+  ;; .. which means to put filename as c-string on the stack
+  ;; .. then jsr newfilesub
+  dex
+  dex
+  lda #<WORD
+  sta stackbase+1,x
+  lda #>WORD
+  sta stackbase+2,x
+  jsr ROMNEWFILE
+
+  lda #<createmsg
+  sta PRINTVEC
+  lda #>createmsg
+  sta PRINTVEC+1
+  jsr ROMPRTSTR
+
+fileready
+  ;; at this point, the file is set up. the directory sector is in
+  ;; the LBLOCK/HBLOCK area, and the stack has the double-precision
+  ;; sector number and a pointer to the directory entry within it
+  ;; so the cluster number is at ptr + 26,27
+
+  ;; get cluster number and cache it
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+  ldy #26
+  lda (SCRATCH),y
+  sta CLUSTER
+  iny
+  lda (SCRATCH),y
+  sta CLUSTER+1
+
+  ;; get file length and cache it
+  iny
+  lda (SCRATCH),y
+  sta FILELEN
+  iny
+  lda (SCRATCH),y
+  sta FILELEN+1
+  iny
+  lda (SCRATCH),y
+  sta FILELEN+2
+  iny
+  lda (SCRATCH),y
+  sta FILELEN+3
+
+  ;; put cluser number onto the stack as a double
+  inx
+  inx
+  lda CLUSTER
+  sta stackbase+1,x
+  lda CLUSTER+1
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  jsr cltosector    ; turn cluster number into sector number on stack
+
+  ;; cache the sector number
+  lda stackbase+1,x
+  sta SECTOR
+  lda stackbase+2,x
+  sta SECTOR+1
+  lda stackbase+3,x
+  sta SECTOR+2
+  lda stackbase+4,x
+  sta SECTOR+3
+
+  ;; set up variables
+  lda #<DATASTART
+  sta NEXTFREE
+  sta LASTLINE
+  lda #>DATASTART
+  sta NEXTFREE+1
+  sta LASTLINE+1
+  lda #<LBLOCK
+  sta BUFPTR
+  lda #>LBLOCK
+  sta BUFPTR+1
+
+  ;; I'm going to start messing with LBLOCK, so clear out the
+  ;; sector cache so as not to confuse myself later.
+  stz CURSEC
+  stz CURSEC+1
+  stz CURSEC+2
+  stz CURSEC+3
+
+
+loadsector
+  ;; load sector data into LBLOCK area
+  dex
+  dex
+  lda #<LBLOCK
+  sta stackbase+1,x
+  lda #>LBLOCK
+  sta stackbase+2,x
+
+  jsr ROMLOADMEM
+
+;  lda #"1
+;  jsr ROMPUTA  
+
+loadline
+  ;; open a new line structure and start to load data into it  
+
+  ;; allocate a new line data structure. At the start, LASTLINE is
+  ;; is the current final line (or zero if there is no last line),
+  ;; and NEXTFREE is the line we are allocating.
+  ;;
+  ldy #2            ; set backward pointer from new line to last
+  lda LASTLINE
+  sta (NEXTFREE),y
+  iny
+  lda LASTLINE+1
+  sta (NEXTFREE),y
+
+  ldy #1            ; set forward pointer from last line to new
+  lda NEXTFREE
+  sta (LASTLINE)
+  lda NEXTFREE+1
+  sta (LASTLINE),y
+
+  ldy #1            ; zero out forward pointer for new line
+  lda #0
+  sta (NEXTFREE)
+  sta (NEXTFREE),y
+
+  lda NEXTFREE      ; reset LASTLINE pointer
+  sta LASTLINE
+  lda NEXTFREE+1
+  sta LASTLINE+1
+
+  clc               ; update pointer to next free structure
+  lda NEXTFREE
+  adc #84           ; constant is size of structure
+  sta NEXTFREE
+  lda NEXTFREE+1
+  adc #0
+  sta NEXTFREE+1
+
+  ;; set up CURLINE and CURDATA
+  clc
+  lda LASTLINE
+  sta CURLINE
+  adc #4
+  sta CURDATA
+  lda LASTLINE+1
+  sta CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  lda CURDATA
+  sta DATAPTR
+  lda CURDATA+1
+  sta DATAPTR+1
+
+continueline
+  ;; copy data into new line
+copyline
+  ;; set up MAXDATA to signal end of data
+  stz MAXDATA       ; default, ie no maximum (will be capped at 80)
+  lda FILELEN+1     ; are we down to the last page yet?
+  bne nomax         ; no, so continue
+  lda FILELEN
+  sta MAXDATA       ; yes, so set maximum to remaining data
+nomax
+
+  ;; set up BUFLIMIT to signal end of buffer
+  stz MAXBUF        ; 0 is default (no limit)
+  lda BUFPTR+1
+  cmp #>HBLOCK      ; are we in the upper half of the buffer?
+  bne nolimit       ; no, so no problem
+  sec
+  lda MAXBUF        ; calculate maximum remaining characters
+  sbc BUFPTR        ; BUG CHECK FOR OFF-BY-1 ERROR!
+  sta MAXBUF
+nolimit
+
+  ldy #0
+copydata
+;  lda #"2
+;  jsr ROMPUTA
+
+  lda (BUFPTR),y
+;  jsr ROMPUTA
+  sta (DATAPTR),y
+  iny
+  cmp #$0A          ; $A = LF = end-of-line marker
+  beq endofline
+  cpy #80           ; BUG this presumes we are not filling an open line
+  beq endofline     ; but for the moment as long as I am dealing with
+  cpy MAXBUF        ; regular text files it should be okay
+  beq endofbuffer
+  cpy MAXDATA
+  bne copydata
+  jmp endofdata
+
+endofline  
+;  lda #"3
+;  jsr ROMPUTA
+;  jsr crlf
+
+  ;; update BUFPTR
+  clc
+  tya
+  adc BUFPTR
+  sta BUFPTR
+  lda BUFPTR+1
+  adc #0
+  sta BUFPTR+1
+
+  ;; update FILELEN
+  tya
+  sta SCRATCH
+  sec
+  lda FILELEN
+  sbc SCRATCH
+  sta FILELEN
+  lda FILELEN+1
+  sbc #0
+  sta FILELEN+1
+  lda FILELEN+2
+  sbc #0
+  sta FILELEN+2
+  lda FILELEN+3
+  sbc #0
+  sta FILELEN+3
+
+  lda FILELEN+1
+;  jsr putax
+  lda FILELEN
+;  jsr putax
+;  jsr crlf
+
+  lda FILELEN
+  ora FILELEN+1
+.(
+  bne continue
+  jmp  endofdata
+continue
+.)
+
+  jmp loadline
+
+endofbuffer
+;  lda #"5
+;  jsr ROMPUTA
+
+  sty SCRATCH       ; cache Y in SCRATCH, we need it a couple of times
+
+  ;; no more data? (do this test both before and after)
+  lda FILELEN
+  ora FILELEN+1
+  beq endofdata
+
+  ;; update FILELEN
+  sec
+  lda FILELEN
+  sbc SCRATCH
+  sta FILELEN
+  lda FILELEN+1
+  sbc #0
+  sta FILELEN+1
+  lda FILELEN+2
+  sbc #0
+  sta FILELEN+2
+  lda FILELEN+3
+  sbc #0
+  sta FILELEN+3
+
+  ;; no more data?
+  lda FILELEN
+  ora FILELEN+1
+  beq endofdata
+
+  lda FILELEN+3
+  bne endofdata     ; in case we've gone negative
+
+  ;; update DATAPTR with data loaded so far
+  clc
+  lda DATAPTR
+  adc SCRATCH
+  sta DATAPTR
+  lda DATAPTR+1
+  adc #0
+  sta DATAPTR+1
+
+  ;; set up the stack to load a new buffer
+  dex
+  dex
+  dex
+  dex
+  clc
+  lda SECTOR
+  adc #1
+  sta stackbase+1,x
+  sta SECTOR
+  lda SECTOR+1
+  adc #0
+  sta SECTOR+1
+  sta stackbase+2,x
+  lda SECTOR+2
+  adc #0
+  sta SECTOR+2
+  sta stackbase+3,x
+  lda SECTOR+3
+  adc #0
+  sta SECTOR+3
+  sta stackbase+4,x
+
+  dex
+  dex
+  lda #<LBLOCK
+  sta stackbase+1,x
+  sta BUFPTR        ; reset BUFPTR while we're at it
+  lda #>LBLOCK
+  sta stackbase+2,x
+  sta BUFPTR+1
+
+  jsr ROMLOADMEM
+  jmp copyline
+
+endofdata
+;  lda #"6
+;  jsr ROMPUTA
+
+finish
+  ;; for debugging, print what we've read
+
+  jsr crlf
+
+  lda #<DATASTART
+  sta CURLINE
+  lda #>DATASTART
+  sta CURLINE+1
+
+printline
+;  lda CURLINE+1
+;  jsr putax
+;  lda CURLINE
+;  jsr putax
+;  jsr ROMGET
+;  cmp #"q
+;  beq doneprint
+;  jsr crlf
+
+  ldy #4
+printloop
+  lda (CURLINE),y
+  jsr ROMPUTA
+  cmp #$0A
+  beq finishline
+  iny
+  cpy #80
+  beq doneline
+  bra printloop
+
+finishline
+  lda #$0D
+  jsr ROMPUTA
+doneline
+  ldy #1
+  lda (CURLINE)
+  sta SCRATCH
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  lda SCRATCH
+  ora SCRATCH+1
+  beq doneprint
+
+  lda SCRATCH
+  sta CURLINE
+  lda SCRATCH+1
+  sta CURLINE+1
+
+  bra printline  
+
+doneprint
+
+  ;; finish
+  rts
+
+
+;;;
+;;; *** LIBRARY ROUTINES
+;;;
+
+;;; extract first parameter and store it in WORD
+;;;
+p1toword
+.(
+  ldy #0
+  ;; skip to first space (ie skip past the command)
+skip1
+  lda INPUT,y
+  beq p1error
+  cmp #32
+  beq skip2
+  iny
+  beq p1error
+  bra skip1
+  ;; now skip to first following non-space (ie start of filename)
+skip2
+  lda INPUT,y
+  beq p1error
+  cmp #32
+  bne copychars
+  iny
+  beq p1error
+  bra skip2
+copychars
+  phx
+  ldx #1
+nextchar
+  lda INPUT,y
+  sta WORD,x
+  beq donecopy
+  cmp #32
+  beq donecopy
+  inx
+  iny
+  bne nextchar
+donecopy
+  stx WORD          ; store the character count
+  plx
+  clc
+  bra p1end
+
+p1error
+  ;; there's been some problem finding the name, so
+  ;; report an error and quit.
+  lda #<p1errstr
+  sta PRINTVEC
+  lda #>p1errstr
+  sta PRINTVEC+1
+  jsr ROMPRTSTR
+  sec
+.)
+p1end
+  rts
+
+
+;; convert a cluster address into a sector address
+;; calculation is cluster-2 * sectors/cluster + resv + len FATs + len root
+;; generally, cluster-2 * 64 + 545
+cltosector
+.(
+  ;; subtract 2
+  sec
+  lda stackbase+1,x
+  sbc #2
+  sta stackbase+1,x
+  lda stackbase+2,x
+  sbc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  sbc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  sbc #0
+  sta stackbase+4,x
+done
+.)
+
+  ;; shift left 6 times, to multiply by 64
+  clc
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  rol stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  ;; add 545 ( = 512+33 = 2*256 + 33)
+  clc
+  lda stackbase+1,x
+  adc #33
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #2
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+
+  rts
+
+
+p1errstr .byte "Usage: med filename", $0a, $0d, $00
+fileerrstr .byte "Error: file already exists", $0a, $0d, $00
+replacestr .byte "Replace existing file? ", $00
+createmsg  .byte "Creating new file", $0a, $0d, $00
+
+
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+
+crlf
+  lda #13
+  jsr ROMPUTA
+  lda #10
+  jsr ROMPUTA
+  rts
+
+
+startstr:   .byte "xmodem listening", $0d, $0a, $00
+recvdstr:   .byte "xmodem received", $0d, $0a, $00
+blockerrstr:.byte "block count error", $0a, $0d, $00
+chksmerrstr:.byte "checksum errror", $0a, $0d, $00
+headerrstr: .byte "header error", $0a, $0d, $00
+hextable:   .byte "0123456789ABCDEF"
