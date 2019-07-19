@@ -36,8 +36,9 @@ DATAEND=$7C00       ; end of data storage
 
 ;;; the $0070 area is used by FORTH but not for anything that might run
 ;;; while the editor is running, so is safe to reuse.
-NEXTFREE=$0070 ; and 0071 -- address of next free line structure
-LASTLINE=$0072 ; and 0073 -- address of final line structure
+PRISTINE=$004C
+NEXTFREE=$0070 ; and 0071 -- address of next available line structure
+LASTLINE=$0072 ; and 0073 -- address of ending line structure for text
 CURLINE=$0074  ; and 0075 
 CURDATA=$0076  ; and 0077
 BUFPTR=$0078   ; and 0079
@@ -115,6 +116,12 @@ checkfile
   clc
   jsr ROMFINDDIRW
   bcc fileready     ; when file already exists
+
+  ;; THIS IS WHERE WE SHOULD CREATE A NEW FILE -- CODE BELOW.
+  ;; BUT FOR THE MOMENT, I AM SKIPPING THAT AND JUMPING STRAIGHT
+  ;; TO THE EDITOR WITH A NEW EMPTY FILE
+
+  jmp emptyfile
 
 newfile
   ;; the named file does not exist, so make a new file with that name
@@ -506,22 +513,19 @@ doneprint
   jmp editstart
 
 
+emptyfile
+  lda DATASTART
+  sta NEXTFREE
+  lda DATASTART+1
+  sta NEXTFREE+1
 
-;;;
-;;; *** EDIT CONTROL
-;;;
-
-editstart
-  jsr cls
-  jsr home
-  stz row
-  stz col
-  lda #<DATASTART
+  ;; we will enter with just a single line, empty but for
+  ;; the trailing newline.
+  lda NEXTFREE
   sta CURLINE
-  sta SCREENSTART
-  lda #>DATASTART
+  lda NEXTFREE+1
   sta CURLINE+1
-  sta SCREENSTART+1
+
   clc
   lda CURLINE
   adc #4
@@ -529,8 +533,72 @@ editstart
   lda CURLINE+1
   adc #0
   sta CURDATA+1
+  lda #$0A
+  sta (CURDATA)
 
-  jmp repaint       ; which will then jump into editloop below
+  lda CURLINE
+  sta LASTLINE
+  lda CURLINE+1
+  sta LASTLINE
+
+  clc
+  lda NEXTFREE
+  adc #84
+  sta NEXTFREE
+  lda NEXTFREE+1
+  adc #0
+  sta NEXTFREE+1
+
+  ;; CURLINE's forward pointer should be 0, and back pointer should
+  ;; point to itself
+  ldy #0
+  lda #0
+  sta (CURLINE),y
+  iny
+  sta (CURLINE),y
+  iny
+  lda CURLINE
+  sta (CURLINE),y
+  iny
+  lda CURLINE+1
+  sta (CURLINE),y
+
+  lda DATASTART
+  sta SCREENSTART
+  lda DATASTART+1
+  sta SCREENSTART+1
+
+
+  jmp warmstart
+
+
+;;;
+;;; *** EDIT CONTROL
+;;;
+
+editstart
+  lda #<DATASTART   ; set up CURLINE to point to start of data
+  sta CURLINE
+  sta SCREENSTART
+  lda #>DATASTART
+  sta CURLINE+1
+  sta SCREENSTART+1
+  clc               ; set up CURDATA to point to data for CURLINE
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+warmstart
+  lda #1            ; set the PRISTINE flag. all edit operations
+  sta PRISTINE      ; unset it so that we know file has changed.
+  jsr cls
+  jsr home
+  stz row
+  stz col
+
+  jmp repaint       ; repaint will then jump into editloop below
 
 ;;; This is the main editor dispatch loop. Fetch a character; if it's
 ;;; in the command-code range, then look it up in the table; otherwise,
@@ -546,11 +614,6 @@ editloop
   dec             ; subtract 1 (to turn it into a 0-ranged value)
   asl             ; shift to multiply by two
   tax             ; that's an offset, so put it in X
-;  lda table,x     ; look up the table value at X
-;  sta jmpvec      ; and store it in jmpvec
-;  lda table+1,x
-;  sta jmpvec+1
-;  jmp (jmpvec)    ; jump to the address
   jmp (table,x)
 
   bra editloop    ; shouldn't need this but included for safety
@@ -899,7 +962,101 @@ donothing
 delline
   jmp editloop
 
+;;; newline opens and moves onto a new line below, potentially
+;;; breaking the current line in half.
 newline
+.(
+  ldy col           ; are we at the end of the line?
+  lda (CURDATA),y
+  cmp #$0A
+  beq atend
+  jmp breakline
+
+atend
+  ;; allocate a new blank line after this one
+  ;; set our next line's back pointer to the new line
+  ;; set new line's forward pointer to that line
+  ;; grab our forward pointer and set it to the new line's
+  ;; set new line's backward pointer to us
+  ;; reset NEXTFREE
+
+  ldy #1            ; make a copy of pointer to next line
+  lda (CURLINE)
+  sta SCRATCH
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  lda SCRATCH       ; new line's fwd pointer to former next line
+  sta (NEXTFREE)
+  lda SCRATCH+1
+  sta (NEXTFREE),y
+
+  ldy #2            ; former next line's back pointer to new line
+  lda NEXTFREE
+  sta (SCRATCH),y
+  iny
+  lda NEXTFREE+1
+  sta (SCRATCH),y
+
+  lda CURLINE+1     ; new line's back pointer to curline
+  sta (NEXTFREE),y
+  dey
+  lda CURLINE
+  sta (NEXTFREE),y
+
+  ldy #1
+  lda NEXTFREE
+  sta (CURLINE)
+  lda NEXTFREE+1
+  sta (CURLINE),y
+
+  ;; before we reset CURLINE, check if we need to reset LASTLINE
+  lda LASTLINE
+  cmp CURLINE
+  bne nope
+  lda LASTLINE+1
+  cmp CURLINE+1
+  bne nope
+  lda NEXTFREE
+  sta LASTLINE
+  lda NEXTFREE+1
+  sta LASTLINE+1
+nope
+
+  lda NEXTFREE     ; reset CURLINE
+  sta CURLINE
+  lda NEXTFREE+1
+  sta CURLINE+1
+
+  clc               ; update next available line
+  lda NEXTFREE
+  adc #84
+  sta NEXTFREE
+  lda NEXTFREE+1
+  adc #0
+  sta NEXTFREE+1
+
+  clc               ; set up CURDATA
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+  lda #$0A          ; add end of line marker for new line
+  sta (CURDATA)
+
+  stz col
+  inc row           ; BUG BUG BUG SCROLL FORWARD IF AT END????  
+  jsr paintdown
+  jsr addstatus
+  jsr moveto
+  jmp editloop
+
+breakline
+  lda #"X
+  jsr ROMPUTCH
+.)
   jmp editloop
 
 nextrow
@@ -985,8 +1142,10 @@ lineloop
 openline
 .(
   lda col           ; make sure we are at start of line
-  bne endopenline
+  beq continue
+  jmp endopenline
 
+continue
   ;; allocate a new line and insert it where the current line is.
   ;; so the steps are:
   ;;   copy CURLINE's back pointer into the new line
@@ -1024,6 +1183,36 @@ openline
   iny
   lda NEXTFREE+1
   sta (CURLINE),y
+
+  ;; before we trash CURLINE, check if we need to reset either or both
+  ;; of SCREENSTART and DATASTART
+.(
+  lda CURLINE
+  cmp SCREENSTART
+  bne nope
+  lda CURLINE+1
+  cmp SCREENSTART+1
+  bne nope
+  lda NEXTFREE
+  sta SCREENSTART
+  lda NEXTFREE+1
+  sta SCREENSTART+1
+nope
+.)
+.(
+  lda CURLINE
+  cmp DATASTART
+  bne nope
+  lda CURLINE+1
+  cmp DATASTART+1
+  bne nope
+  lda NEXTFREE
+  sta DATASTART
+  lda NEXTFREE+1
+  sta DATASTART+1
+nope
+.)
+
 
   clc
   lda NEXTFREE
