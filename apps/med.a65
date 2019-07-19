@@ -55,7 +55,8 @@ MAXDATA     .byte 0
 SCREENSTART .word 0
 
 NROWS=24
-MAXROW=NROWS-2      ; two less to account for status row
+MAXROW=NROWS-3
+SENTINELROW=MAXROW+2
 NCOLS=80
 MAXCOL=NCOLS-1
 
@@ -643,7 +644,7 @@ paintloop
   jsr paintrow
   lda row
   inc
-  cmp #MAXROW
+  cmp #SENTINELROW
   beq endpaint
   sta row
   clc
@@ -832,59 +833,38 @@ donothing
  jmp editloop
 
 scrollfwd
-  ldy #2            ; take the line before this and make it the
-  lda (CURLINE),y   ; first line of the screen
-  sta SCREENSTART
-  iny
-  lda (CURLINE),y
-  sta SCREENSTART+1
-  stz row
-  stz col
 
+  phx
+  ldx #12
   lda SCREENSTART
-  sta CURLINE
+  sta SCRATCH
   lda SCREENSTART+1
-  sta CURLINE+1
+  sta SCRATCH+1
 
-  clc
-  lda CURLINE
-  adc #4
-  sta CURDATA
-  lda CURLINE+1
-  adc #0
-  sta CURDATA+1
-
-  jmp repaint
-.)
-
-openline
-  jmp editloop
-
-prevrow
-.(
-  lda row
-  beq donothing     ; do nothing if on last line BUG SCROLL AROUND
-
-  ldy #2            ; do nothing if at first line of data
-  lda #<CURLINE     ; as signaled by line that points to itself in
-  cmp (CURLINE),y   ; its back-pointer
-  bne continue
-  lda (CURLINE),y
-  cmp #>CURLINE
-  beq donothing  
-
-continue
-  dec row
-
-  ldy #3
-  lda (CURLINE),y
+lineloop
+  ldy #1
+  lda (SCRATCH),y
   pha
-  dey
-  lda (CURLINE),y
-  sta CURLINE
+  lda (SCRATCH)
+  sta SCRATCH
   pla
-  sta CURLINE+1
+  sta SCRATCH+1
+  dex
+  bne lineloop
+  plx
 
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+
+  ldy #1
+  lda (CURLINE)
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
   jsr moveto
 
   clc
@@ -895,8 +875,124 @@ continue
   adc #0
   sta CURDATA+1
 
+  lda #10
+  sta row
+
+  jmp repaint
+.)
+
+openline
+  jmp editloop
+
+prevrow
+.(
+  ldy #2            ; do nothing if at first line of data
+  lda #<CURLINE     ; as signaled by line that points to itself in
+  cmp (CURLINE),y   ; its back-pointer
+  bne nextcheck
+  lda (CURLINE),y
+  cmp #>CURLINE
+  beq donothing  
+
+nextcheck
+  lda row           ; top line of screen but prior data, so scroll back
+  beq scrollback
+
+  ldy #3            ; follow back-pointer from current line to get
+  lda (CURLINE),y   ; last one, and update both CURLINE and CURDATA
+  pha
+  dey
+  lda (CURLINE),y
+  sta CURLINE
+  pla
+  sta CURLINE+1
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  dec row
+  jsr moveto
+
 donothing
   jmp editloop
+
+scrollback
+  ;; find a new SCREENSTART. start with the current one and go back
+  ;; up to 15 lines (or until the start of the data).
+
+  lda SCREENSTART
+  sta SCRATCH
+  lda SCREENSTART+1
+  sta SCRATCH+1
+
+  phx
+  ldx #15
+lineloop
+  ;; It would be safe not to look for an end of the pointer chain, because
+  ;; the first line's back pointer always points to itself. But we need
+  ;; to know how many lines back we have scrolled so that we can position
+  ;; the cursor correctly.
+
+  ldy #2
+  lda (SCRATCH),y
+  cmp SCRATCH
+  bne continue
+  iny
+  lda (SCRATCH),y
+  cmp SCRATCH+1
+  beq endloop
+
+continue
+  ldy #3            ; follow the back-pointer
+  lda (SCRATCH),y
+  pha
+  dey
+  lda (SCRATCH),y
+  sta SCRATCH
+  pla
+  sta SCRATCH+1
+
+  dex
+  bne lineloop
+endloop
+  stx temp
+  plx
+
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+
+  ;; curline should move one back
+  ldy #2
+  lda (CURLINE),y
+  pha
+  iny
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  sec
+  lda #14      ; 15 was our count; 14 is one less because we are moving
+  sbc temp     ; up one line.
+  sta row
+  jsr moveto
+
+  jmp repaint
 .)
 
 testcode
@@ -1114,12 +1210,12 @@ moveto
   lda #$5B ; [
   jsr ROMPUTCH
   lda row  ; row
-  inc
+  inc               ; code counts from 0, terminal counts from 1
   jsr todecimal
   lda #$3B  ; semic
   jsr ROMPUTCH
   lda col  ; col
-  inc
+  inc               ; code counts from 0, terminal counts from 1
   jsr todecimal
   lda #$48  ; H
   jsr ROMPUTCH
