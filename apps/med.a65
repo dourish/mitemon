@@ -2,6 +2,8 @@
 ;;; Standalone text editor. It's based on the editor in SECND but with
 ;;; a very different data structure and an expectation of a 80x24 screen.
 ;;;
+;;; Paul Dourish, July 2019
+;;;
 
 * = $0300
 
@@ -37,24 +39,68 @@ CURLINE=$0074  ; and 0075
 CURDATA=$0076  ; and 0077
 BUFPTR=$0078   ; and 0079
 DATAPTR=$007A  ; and 007B
+row=$007C
+col=$007D
+lower=$007E    ; and 007F
 
-CLUSTER  .word 0
-FILELEN  .word 0
-         .word 0
-SECTOR   .word 0
-         .word 0
-MAXBUF   .byte 0
-MAXDATA  .byte 0
+temp=SCRATCH+15
+
+CLUSTER     .word 0
+FILELEN     .word 0
+            .word 0
+SECTOR      .word 0
+            .word 0
+MAXBUF      .byte 0
+MAXDATA     .byte 0
+SCREENSTART .word 0
+
+NROWS=24
+MAXROW=NROWS-2      ; two less to account for status row
+NCOLS=80
+MAXCOL=NCOLS-1
 
 
 #include "../decl.a65"
 #include "../stack.a65"
 #include "jmptable.a65"
 
+table
+  .word tostart     ; a
+  .word back        ; b
+  .word undefined   ; c
+  .word delfwd      ; d
+  .word toend       ; e
+  .word forw        ; f
+  .word undefined   ; g
+  .word delback     ; h
+  .word undefined   ; i
+  .word undefined   ; j
+  .word delline     ; k
+  .word repaint     ; l
+  .word newline     ; m
+  .word nextrow     ; n
+  .word openline    ; o
+  .word prevrow     ; p
+  .word undefined   ; q
+  .word undefined   ; r
+  .word undefined   ; s
+  .word testcode    ; t
+  .word undefined   ; u
+  .word nextpage    ; v
+  .word undefined   ; w
+  .word exit        ; x
+  .word undefined   ; y
+  .word undefined   ; z
+
 
 start
 
-  ;; extract the filename from the command line, and copy it into
+  ;;;
+  ;;; *** FILE READING/PARSING
+  ;;; Loads file data before editor begins
+  ;;;
+
+  ;; First, extract filename the command line, and copy it into
   ;; WORD as a counted string
   jsr p1toword
   bcc checkfile
@@ -399,6 +445,7 @@ endofdata
 finish
   ;; for debugging, print what we've read
 
+#if 0
   jsr crlf
 
   lda #<DATASTART
@@ -449,9 +496,637 @@ doneline
   bra printline  
 
 doneprint
+#endif
 
-  ;; finish
+  ;; file loading is complete. start the editor.
+  jmp editstart
+
+
+
+;;;
+;;; *** EDIT CONTROL
+;;;
+
+editstart
+  jsr cls
+  jsr home
+  stz row
+  stz col
+  lda #<DATASTART
+  sta CURLINE
+  sta SCREENSTART
+  lda #>DATASTART
+  sta CURLINE+1
+  sta SCREENSTART+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  jmp repaint       ; which will then jump into editloop below
+
+;;; This is the main editor dispatch loop. Fetch a character; if it's
+;;; in the command-code range, then look it up in the table; otherwise,
+;;; insert it. Everything is done with JMPs and every command JMPs back
+;;; to here. Escape is handled with a separate messy routine that should
+;;; really be a second table.
+editloop
+
+  jsr ROMGET
+  cmp #$1B        ; if it's less than 27, it's a control code
+  beq escape      ; exactly 27 is escape
+  bcs notcmd      ; over 27 is not a command
+  dec             ; subtract 1 (to turn it into a 0-ranged value)
+  asl             ; shift to multiply by two
+  tax             ; that's an offset, so put it in X
+;  lda table,x     ; look up the table value at X
+;  sta jmpvec      ; and store it in jmpvec
+;  lda table+1,x
+;  sta jmpvec+1
+;  jmp (jmpvec)    ; jump to the address
+  jmp (table,x)
+
+  bra editloop    ; shouldn't need this but included for safety
+
+notcmd
+  jsr insert
+  bra editloop
+
+escape
+  jsr ROMGETCH
+  cmp #"f"
+  beq escf
+  cmp #"b"
+  beq escb
+  cmp #"v"
+  beq escv
+  cmp #"<
+  beq escless
+  cmp #">
+  beq escgreater
+  cmp #"["
+  beq arrow
+  jmp editloop
+escf
+  jmp fowdword
+escb
+  jmp backword
+escv
+  jmp prevpage
+escless
+  jmp filestart
+escgreater
+  jmp fileend
+arrow
+  jsr ROMGETCH
+  cmp #"A"
+  beq arrowup
+  cmp #"B"
+  beq arrowdown
+  cmp #"C"
+  beq arrowright
+  cmp #"D"
+  beq arrowleft
+  jmp editloop
+arrowup
+  jmp prevrow
+arrowdown
+  jmp nextrow
+arrowright
+  jmp forw
+arrowleft
+  jmp back
+
+;; output the text for one line object, pointed to by lower. 
+;; do the output directly (faster without subroutine call).
+paintrow
+.(
+  phy
+  ldy #4
+rdyloop
+  lda ACIA_STATUS
+  and #$10
+  beq rdyloop
+  lda (lower),y
+  beq done
+  cmp #$0A
+  beq done
+  sta ACIA_DATA
+  iny
+  cpy #MAXCOL
+  beq done
+  bra rdyloop
+done
+  ply
   rts
+.)
+
+;;; clear below and print from current row to the bottom of
+;;; of the screen. (uses rowbase to point to line)
+paintdown
+.(
+  lda CURLINE
+  sta lower
+  lda CURLINE+1
+  sta lower+1
+  lda row
+  pha               ; stash the row count
+  lda col
+  pha               ; stash the column count
+  stz col
+paintloop
+  jsr moveto
+  jsr clrtoend
+  jsr paintrow
+  lda row
+  inc
+  cmp #MAXROW
+  beq endpaint
+  sta row
+  clc
+
+  ldy #1            ; move to next line in data
+  lda (lower)
+  pha
+  lda (lower),y
+  sta lower+1
+  pla
+  sta lower
+
+  ora lower+1
+  beq endpaint      ; end of data
+
+  bra paintloop
+endpaint
+  pla
+  sta col
+  pla
+  sta row
+  jsr moveto
+  rts
+.)
+
+;;; repaint the whole screen, saving and then restoring cursor position
+;;;
+repaint
+  lda row
+  pha
+  lda col
+  pha
+  lda CURLINE
+  pha
+  lda CURLINE+1
+  pha
+  stz row
+  stz col
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+  jsr cls
+  jsr home
+  jsr paintdown
+  pla
+  sta CURLINE+1
+  pla
+  sta CURLINE
+  pla
+  sta col
+  pla
+  sta row
+  jsr addstatus
+  jsr moveto
+  jmp editloop
+
+
+addstatus
+  lda #$1B ; ESC
+  jsr ROMPUTCH
+  lda #$5B ; [
+  jsr ROMPUTCH
+  lda #23
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr ROMPUTCH
+  lda #1
+  jsr todecimal
+  lda #$48  ; H
+  jsr ROMPUTCH
+  lda #$2b  ; +
+  jsr ROMPUTCH
+  ldy #78
+statusloop
+  lda #"-
+  jsr ROMPUTCH
+  dey
+  bne statusloop
+  lda #$2b  ; +
+  jsr ROMPUTCH
+  rts
+
+
+;;;
+;;; *** EDITOR COMMANDS
+;;;
+
+insert
+  jmp editloop
+
+tostart
+  stz col
+  jsr moveto
+  jmp editloop
+
+back
+.(
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
+donothing
+ jmp editloop
+.)
+
+undefined
+  jmp editloop
+
+delfwd
+  jmp editloop
+
+toend
+.(
+  ldy #$00
+endloop
+  lda (CURDATA),y
+  beq atend         ; we read a newline if there's a null -- BUG?
+  cmp #$0A          ; newline signals end of line
+  beq atend
+  iny
+  cpy #MAXCOL
+  beq atend
+  bra endloop
+atend
+  sty col
+  jsr moveto
+  jmp editloop
+.)
+
+forw
+.(
+  lda col
+  cmp #MAXCOL ; #$3F
+  beq donothing     ; do nothing at the maximum column
+  ldy col
+  lda (CURDATA),y
+  beq donothing     ; read null as end-of-line -- BUG?
+  cmp #$0A
+  beq donothing     ; do nothing at end-of-line
+  inc col
+  jsr moveto
+donothing
+ jmp editloop
+.)
+
+
+delback
+  jmp editloop
+
+delline
+  jmp editloop
+
+newline
+  jmp editloop
+
+nextrow
+.(
+  lda CURLINE       ; do nothing if there is no more data
+  ora CURLINE+1
+  beq donothing
+
+  lda row
+  cmp #MAXROW       ; do nothing if we're on the last row
+  beq scrollfwd     ; BUG fix this once I want to scroll around
+
+  inc row
+  ldy #1
+  lda (CURLINE)
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+  jsr moveto
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+donothing
+ jmp editloop
+
+scrollfwd
+  ldy #2            ; take the line before this and make it the
+  lda (CURLINE),y   ; first line of the screen
+  sta SCREENSTART
+  iny
+  lda (CURLINE),y
+  sta SCREENSTART+1
+  stz row
+  stz col
+
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  jmp repaint
+.)
+
+openline
+  jmp editloop
+
+prevrow
+.(
+  lda row
+  beq donothing     ; do nothing if on last line BUG SCROLL AROUND
+
+  ldy #2            ; do nothing if at first line of data
+  lda #<CURLINE     ; as signaled by line that points to itself in
+  cmp (CURLINE),y   ; its back-pointer
+  bne continue
+  lda (CURLINE),y
+  cmp #>CURLINE
+  beq donothing  
+
+continue
+  dec row
+
+  ldy #3
+  lda (CURLINE),y
+  pha
+  dey
+  lda (CURLINE),y
+  sta CURLINE
+  pla
+  sta CURLINE+1
+
+  jsr moveto
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+donothing
+  jmp editloop
+.)
+
+testcode
+  jmp editloop
+
+exit
+  lda #NROWS
+  dec
+  sta row
+  stz col
+  jsr moveto
+  rts
+
+fowdword
+  jmp editloop
+
+backword
+  jmp editloop
+
+nextpage
+.(
+  ;; reset SCREENSTART forward by about 20 lines
+  phx
+
+  ldx #NROWS
+  dex
+  dex
+  dex
+
+  lda SCREENSTART
+  sta SCRATCH
+  lda SCREENSTART+1
+  sta SCRATCH+1
+
+lineloop
+  ;; is there another line? look at forward pointer
+  ldy #0
+  lda (SCRATCH),y
+  iny
+  ora (SCRATCH),y
+  beq endloop
+
+  lda (SCRATCH),y
+  pha
+  dey
+  lda (SCRATCH),y
+  sta SCRATCH
+  pla
+  sta SCRATCH+1
+
+  txa
+  jsr putax
+  dex
+  bne lineloop
+endloop
+  plx
+
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+  stz row
+  stz col
+
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  jmp repaint
+.)
+
+prevpage
+  jmp editloop
+
+filestart
+  lda #<DATASTART
+  sta SCREENSTART
+  lda #>DATASTART
+  sta SCREENSTART+1
+
+  stz row
+  stz col
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+  jmp repaint
+
+fileend
+.(
+  ;; jump to a point about 10 lines from the end of the file
+
+  phx
+  ldx #12
+
+  lda LASTLINE
+  sta SCRATCH
+  lda LASTLINE+1
+  sta SCRATCH+1
+
+lineloop
+  ldy #2
+  lda (SCRATCH),y
+  pha
+  iny
+  lda (SCRATCH),y
+  sta SCRATCH+1
+  pla
+  sta SCRATCH
+
+  dex
+  bne lineloop
+
+  ;; reuse code from above???
+
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+
+  stz row
+  stz col
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+  jmp repaint
+.)
+
+
+
+;;;
+;;; *** SCREEN CONTROL
+;;;
+
+;; for small integers (<100), convert to decimal and output
+todecimal
+.(
+  ldy #$30
+  sty temp  ; temp
+convloop
+  cmp #$0A
+  bmi donedigit
+  sec
+  sbc #$0A
+  inc temp
+  bne convloop
+donedigit
+  tay
+  lda temp
+  jsr ROMPUTCH
+  tya
+  clc
+  adc #$30
+  jsr ROMPUTCH
+  rts
+.)
+
+cls
+  lda #$1B  ; esc
+  jsr ROMPUTCH
+  lda #$5B  ; "["
+  jsr ROMPUTCH
+  lda #$32  ; "2"
+  jsr ROMPUTCH
+  lda #$4A  ; "J"
+  jsr ROMPUTCH
+  rts
+
+home
+  lda #$1B  ; esc
+  jsr ROMPUTCH
+  lda #$5B  ; [
+  jsr ROMPUTCH
+  lda #$48  ; H
+  jsr ROMPUTCH
+  rts
+
+clrtoend
+  lda #$1B  ; ESC
+  jsr ROMPUTCH
+  lda #$5B  ; [
+  jsr ROMPUTCH
+  lda #$30  ; 0
+  jsr ROMPUTCH
+  lda #$4A ; H
+  jsr ROMPUTCH
+  rts
+
+moveto
+  lda #$1B ; ESC
+  jsr ROMPUTCH
+  lda #$5B ; [
+  jsr ROMPUTCH
+  lda row  ; row
+  inc
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr ROMPUTCH
+  lda col  ; col
+  inc
+  jsr todecimal
+  lda #$48  ; H
+  jsr ROMPUTCH
+  rts
+
+
+
 
 
 ;;;
