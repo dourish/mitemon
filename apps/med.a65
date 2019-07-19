@@ -20,6 +20,10 @@ CURSEC=$0068
 WORD=$7EC0
 LBLOCK=$7C00
 HBLOCK=$7D00
+IOSENTINEL=$7E00
+
+sdsavebuf=$e1d0
+
 
 ;;; Data structures/Rationale
 ;;;
@@ -37,12 +41,14 @@ DATAEND=$7C00       ; end of data storage
 ;;; the $0070 area is used by FORTH but not for anything that might run
 ;;; while the editor is running, so is safe to reuse.
 PRISTINE=$004C
-NEXTFREE=$0070 ; and 0071 -- address of next available line structure
-LASTLINE=$0072 ; and 0073 -- address of ending line structure for text
-CURLINE=$0074  ; and 0075 
-CURDATA=$0076  ; and 0077
-BUFPTR=$0078   ; and 0079
-DATAPTR=$007A  ; and 007B
+SAVEX=$004D
+FIRSTLINE=$004E ; and 004F
+NEXTFREE=$0070  ; and 0071 -- address of next available line structure
+LASTLINE=$0072  ; and 0073 -- address of ending line structure for text
+CURLINE=$0074   ; and 0075 
+CURDATA=$0076   ; and 0077
+BUFPTR=$0078    ; and 0079
+DATAPTR=$007A   ; and 007B
 row=$007C
 col=$007D
 lower=$007E    ; and 007F
@@ -56,7 +62,7 @@ SECTOR      .word 0
             .word 0
 MAXBUF      .byte 0
 MAXDATA     .byte 0
-SCREENSTART .word 0
+SCREENSTART .word 0 ; points to line structure for first line on screen
 
 NROWS=24
 MAXROW=NROWS-3
@@ -88,17 +94,25 @@ table
   .word prevrow     ; p
   .word undefined   ; q
   .word undefined   ; r
-  .word undefined   ; s
+  .word save        ; s
   .word testcode    ; t
   .word undefined   ; u
   .word nextpage    ; v
   .word undefined   ; w
   .word exit        ; x
   .word undefined   ; y
-  .word undefined   ; z
+  .word test2       ; z
 
 
 start
+
+  ;;; start off by setting up some key variables
+  lda #<DATASTART
+  sta FIRSTLINE
+  sta NEXTFREE
+  lda #>DATASTART
+  sta FIRSTLINE+1
+  sta NEXTFREE+1
 
   ;;;
   ;;; *** FILE READING/PARSING
@@ -109,6 +123,9 @@ start
   ;; WORD as a counted string
   jsr p1toword
   bcc checkfile
+
+  ;; otherwise there has been an error which has already been reported,
+  ;; so, quit.
   rts
 
 checkfile
@@ -123,23 +140,6 @@ checkfile
 
   jmp emptyfile
 
-newfile
-  ;; the named file does not exist, so make a new file with that name
-  ;; .. which means to put filename as c-string on the stack
-  ;; .. then jsr newfilesub
-  dex
-  dex
-  lda #<WORD
-  sta stackbase+1,x
-  lda #>WORD
-  sta stackbase+2,x
-  jsr ROMNEWFILE
-
-  lda #<createmsg
-  sta PRINTVEC
-  lda #>createmsg
-  sta PRINTVEC+1
-  jsr ROMPRTSTR
 
 fileready
   ;; at this point, the file is set up. the directory sector is in
@@ -202,6 +202,7 @@ fileready
   lda #>DATASTART
   sta NEXTFREE+1
   sta LASTLINE+1
+
   lda #<LBLOCK
   sta BUFPTR
   lda #>LBLOCK
@@ -459,9 +460,9 @@ finish
 #if 0
   jsr crlf
 
-  lda #<DATASTART
+  lda FIRSTLINE
   sta CURLINE
-  lda #>DATASTART
+  lda FIRSTLINE+1
   sta CURLINE+1
 
 printline
@@ -514,11 +515,6 @@ doneprint
 
 
 emptyfile
-  lda DATASTART
-  sta NEXTFREE
-  lda DATASTART+1
-  sta NEXTFREE+1
-
   ;; we will enter with just a single line, empty but for
   ;; the trailing newline.
   lda NEXTFREE
@@ -539,7 +535,7 @@ emptyfile
   lda CURLINE
   sta LASTLINE
   lda CURLINE+1
-  sta LASTLINE
+  sta LASTLINE+1
 
   clc
   lda NEXTFREE
@@ -563,9 +559,9 @@ emptyfile
   lda CURLINE+1
   sta (CURLINE),y
 
-  lda DATASTART
+  lda CURLINE
   sta SCREENSTART
-  lda DATASTART+1
+  lda CURLINE+1
   sta SCREENSTART+1
 
 
@@ -593,12 +589,15 @@ editstart
 warmstart
   lda #1            ; set the PRISTINE flag. all edit operations
   sta PRISTINE      ; unset it so that we know file has changed.
+
   jsr cls
   jsr home
   stz row
   stz col
 
+  stx SAVEX         ; preserve the stack pointer
   jmp repaint       ; repaint will then jump into editloop below
+
 
 ;;; This is the main editor dispatch loop. Fetch a character; if it's
 ;;; in the command-code range, then look it up in the table; otherwise,
@@ -1185,7 +1184,7 @@ continue
   sta (CURLINE),y
 
   ;; before we trash CURLINE, check if we need to reset either or both
-  ;; of SCREENSTART and DATASTART
+  ;; of SCREENSTART and FIRSTLINE
 .(
   lda CURLINE
   cmp SCREENSTART
@@ -1201,15 +1200,15 @@ nope
 .)
 .(
   lda CURLINE
-  cmp DATASTART
+  cmp FIRSTLINE
   bne nope
   lda CURLINE+1
-  cmp DATASTART+1
+  cmp FIRSTLINE+1
   bne nope
   lda NEXTFREE
-  sta DATASTART
+  sta FIRSTLINE
   lda NEXTFREE+1
-  sta DATASTART+1
+  sta FIRSTLINE+1
 nope
 .)
 
@@ -1356,6 +1355,12 @@ endloop
 .)
 
 testcode
+  jsr fillbuffer
+  jmp editloop
+
+test2
+  txa
+  jsr putax
   jmp editloop
 
 exit
@@ -1403,8 +1408,6 @@ lineloop
   pla
   sta SCRATCH+1
 
-;  txa
-;  jsr putax
   dex
   bne lineloop
 endloop
@@ -1436,9 +1439,9 @@ prevpage
   jmp editloop
 
 filestart
-  lda #<DATASTART
+  lda FIRSTLINE
   sta SCREENSTART
-  lda #>DATASTART
+  lda FIRSTLINE
   sta SCREENSTART+1
 
   stz row
@@ -1481,6 +1484,8 @@ lineloop
   dex
   bne lineloop
 
+  plx
+
   ;; reuse code from above???
 
   lda SCRATCH
@@ -1503,6 +1508,10 @@ lineloop
   sta CURDATA+1
   jmp repaint
 .)
+
+save
+  jsr savefile
+  jmp editloop
 
 
 
@@ -1582,6 +1591,245 @@ moveto
   rts
 
 
+;;;
+;;; *** FILE SAVING
+;;;
+
+FROMPTR=lower       ; reusing/renaming from earlier
+TOPTR=BUFPTR        ; reusing/renaming from earlier
+TMPSIZE=DATAPTR     ; reusing/renaming from earlier
+TMPY=MAXDATA        ; reusing/renaming from earlier
+
+savefile
+.(
+  ldx SAVEX         ; restore the stack pointer
+
+  lda CLUSTER       ; new file or existing?
+  ora CLUSTER+1
+  bne sharedsave    ; existing file, we already know the cluster
+
+  ;; if we are here, this is a new file, so we have to set it up
+  ;; in the directory and get the cluster number.
+  
+  jsr mknewfile
+
+  ;; get cluster number and cache it
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+  ldy #26
+  lda (SCRATCH),y
+  sta CLUSTER
+  iny
+  lda (SCRATCH),y
+  sta CLUSTER+1
+
+  ;; clear off the stack
+  inx
+  inx
+  inx
+  inx
+  inx
+  inx
+
+sharedsave
+  ;; zero out our size counter (keeps track of writes)
+  stz TMPSIZE
+  stz TMPSIZE+1
+
+  ;; set the file length to zero
+  stz FILELEN
+  stz FILELEN+1
+  stz FILELEN+2
+  stz FILELEN+3
+
+  lda FIRSTLINE     ; data to be saved starts here
+  sta FROMPTR
+  lda FIRSTLINE+1
+  sta FROMPTR+1
+
+  lda #3
+  sta TMPY          ; this is going to be where Y starts off in fillbuffer
+
+writeloop
+  ;; fill the buffer
+  jsr fillbuffer
+
+  ;; flush the buffer. set up stack for save.
+  dex               ; first, the address parameter
+  dex
+  lda #<LBLOCK
+  sta 1,x
+  lda #>LBLOCK
+  sta 2,x
+  dex               ; second, the count parameter (512)
+  dex
+  lda #2
+  sta 2,x
+  stz 1,x
+  dex               ; third, the cluster parameter
+  dex
+  lda CLUSTER
+  sta 1,x
+  lda CLUSTER+1
+  sta 2,x
+  dex               ; fourth, the offset parameter
+  dex
+  lda TMPSIZE
+  sta 1,x
+  lda TMPSIZE+1
+  sta 2,x
+
+  ;; do the write
+  jsr ROMSAVEMEM
+
+  ;; update offset in case we need to write more data
+  clc
+  lda TMPSIZE+1
+  adc #2
+  sta TMPSIZE+1
+
+  ;; more data?
+  lda FROMPTR
+  ora FROMPTR+1
+  bne writeloop
+
+  ;; reset sector cache sicne I have trashed LBLOCK many times
+  stz CURSEC
+  stz CURSEC+1
+  stz CURSEC+2
+  stz CURSEC+3
+
+  ;; open directory entry
+  jsr ROMFINDDIRW
+
+  lda 1,x
+  sta SCRATCH
+  lda 2,x
+  sta SCRATCH+1
+
+  ;; update filelength
+  ldy #28
+  lda FILELEN
+  sta (SCRATCH),y
+  iny
+  lda FILELEN+1
+  sta (SCRATCH),y
+  iny
+  lda FILELEN+2
+  sta (SCRATCH),y
+  iny
+  lda FILELEN+3
+  sta (SCRATCH),y
+
+  ;; flush directory entry
+  inx
+  inx
+  jsr sdsavebuf
+
+
+  rts
+.)
+
+mknewfile
+  ;; the named file does not exist, so make a new file with that name
+  ;; .. which means to put filename as c-string on the stack
+  ;; .. then jsr newfilesub
+  dex
+  dex
+  lda #<WORD
+  sta stackbase+1,x
+  lda #>WORD
+  sta stackbase+2,x
+  jsr ROMNEWFILE
+  rts
+
+;;; WARNING!! ENSURE FROMPTR IS ALREADY SET BEFORE ENTERING
+;;;
+fillbuffer
+  ;; I'm going to start messing with LBLOCK, so clear out the
+  ;; sector cache so as not to confuse myself later.
+  stz CURSEC
+  stz CURSEC+1
+  stz CURSEC+2
+  stz CURSEC+3
+
+  ;; FROMPTR should already be set from last time through (or from
+  ;; our caller, which should be savefile).
+
+  ;; start copying. this isn't going to be the most efficient mechanism but
+  ;; it should be the least error-prone.
+
+blockcopy
+  lda #<LBLOCK      ; TOPTR gets reset every time
+  sta TOPTR
+  lda #>LBLOCK
+  sta TOPTR+1
+
+  ldy TMPY          ; 3 at outset, will start at 4 after INY
+copyloop
+  iny
+  lda (FROMPTR),y
+  sta (TOPTR)
+
+  cmp #$0A          ; end-of-line marker?
+  bne nexttest
+
+  ;; end of this line
+  ;; first, update FILELEN by y-3
+  dey
+  dey
+  dey
+  clc
+  tya
+  adc FILELEN
+  sta FILELEN
+  lda FILELEN+1
+  adc #0
+  sta FILELEN+1
+  lda FILELEN+2
+  adc #0
+  sta FILELEN+2
+  lda FILELEN+3
+  adc #0
+  sta FILELEN+3
+
+
+  ldy #1            ; move pointer to next line
+  lda (FROMPTR),y
+  pha
+  lda (FROMPTR)
+  sta FROMPTR
+  pla
+  sta FROMPTR+1
+  ora FROMPTR       ; test for end-of-data (ptr=0)
+  beq dataended
+  ldy #3            ; reset Y
+  
+nexttest
+.(
+  clc
+  lda TOPTR
+  adc #1
+  sta TOPTR
+  bcc skip
+  inc TOPTR+1
+skip
+.)
+  lda TOPTR+1       ; check for end of buffer
+  cmp #>IOSENTINEL
+  bne copyloop
+  lda TOPTR         ; this is technically not needed but leave it
+  cmp #<IOSENTINEL
+  bne copyloop
+
+  ;; this means we've hit the end of the buffer
+  ;; save Y for next time
+  sty TMPY
+
+dataended
+  rts
 
 
 
