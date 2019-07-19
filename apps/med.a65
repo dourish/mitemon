@@ -2,6 +2,9 @@
 ;;; Standalone text editor. It's based on the editor in SECND but with
 ;;; a very different data structure and an expectation of a 80x24 screen.
 ;;;
+;;; Like the editor in FORTH, it uses approximately emacs-ish key
+;;; bindings.
+;;;
 ;;; Paul Dourish, July 2019
 ;;;
 
@@ -553,8 +556,7 @@ editloop
   bra editloop    ; shouldn't need this but included for safety
 
 notcmd
-  jsr insert
-  bra editloop
+  jmp insert
 
 escape
   jsr ROMGETCH
@@ -734,7 +736,67 @@ statusloop
 ;;;
 
 insert
+  pha
+  ldy col
+  lda (CURDATA),y
+  cmp #$0A
+  bne notatend
+inschar
+  pla
+  sta (CURDATA),y
+  jsr ROMPUTCH
+  iny
+  lda #$0A
+  sta (CURDATA),y
+  inc col
+  jsr moveto
   jmp editloop
+
+notatend
+.(
+  ;; go to the end of the line, and copy everything along one place
+findend
+  iny
+  cpy #80
+  beq endloop
+  lda (CURDATA),y
+  cmp #$0A
+  bne findend
+endloop
+  ;; y points at end-of-line character. move everything along.
+copyloop
+  lda (CURDATA),y   ; copy character at Y forward
+  iny
+  sta (CURDATA),y
+  dey               ; move back down the line
+  dey
+  cpy col           ; stop at the insertion column
+  bne copyloop  
+
+  lda (CURDATA),y   ; copy remaining character at insertion spot
+  iny
+  sta (CURDATA),y
+  dey
+
+  pla               ; now insert new character
+  sta (CURDATA),y
+
+  lda col
+  pha
+  stz col
+  jsr moveto
+  lda CURLINE
+  sta lower
+  lda CURLINE+1
+  sta lower+1
+  jsr paintrow
+  pla
+  inc               ; move forward by one character
+  sta col
+  jsr moveto
+.)
+  jmp editloop
+
 
 tostart
   stz col
@@ -754,9 +816,39 @@ donothing
 undefined
   jmp editloop
 
+;;; delete character forward. remove character under the cursor unless
+;;; we are at the end of the line
 delfwd
-  jmp editloop
+.(
+  ldy col
+  lda (CURDATA),y
+  beq nodelete
+  cmp #$0A
+  beq nodelete
 
+  ;; not at end of line, so go through the line moving everything
+  ;; back
+delloop
+  iny
+  lda (CURDATA),y
+  dey
+  sta (CURDATA),y
+  cmp #0            ; in case DEY reset Z
+  beq done
+  cmp #$0A
+  beq done
+  jsr ROMPUTCH
+  iny
+  bra delloop
+done
+  lda #32           ; space
+  jsr ROMPUTCH
+  jsr moveto        ; restore original cursor position
+nodelete
+  jmp editloop
+.)
+
+;;; move cursor to end of current line
 toend
 .(
   ldy #$00
@@ -792,8 +884,17 @@ donothing
 .)
 
 
+;;; delete character backwards
 delback
+.(
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
+  jmp delfwd
+donothing
   jmp editloop
+.)
 
 delline
   jmp editloop
@@ -882,7 +983,75 @@ lineloop
 .)
 
 openline
+.(
+  lda col           ; make sure we are at start of line
+  bne endopenline
+
+  ;; allocate a new line and insert it where the current line is.
+  ;; so the steps are:
+  ;;   copy CURLINE's back pointer into the new line
+  ;;   set the new line's forward pointer to be CURLINE
+  ;;   set the forward pointer for the prior line to be the new line
+  ;;   set CURLINE's back pointer to be the new line
+  ;;   update CURLINE and CURDATA
+  ;;   update NEXTFREE
+  ;; to start with, NEXTFREE is the new line and CURLINE is the
+  ;; current one.
+
+  ldy #2
+  lda (CURLINE),y
+  sta SCRATCH       ; keep a copy, we will need it in a moment
+  sta (NEXTFREE),y
+  iny
+  lda (CURLINE),y
+  sta SCRATCH+1
+  sta (NEXTFREE),y
+
+  ldy #1
+  lda CURLINE
+  sta (NEXTFREE)
+  lda CURLINE+1
+  sta (NEXTFREE),y
+
+  lda NEXTFREE
+  sta (SCRATCH)
+  lda NEXTFREE+1
+  sta (SCRATCH),y
+
+  iny
+  lda NEXTFREE
+  sta (CURLINE),y
+  iny
+  lda NEXTFREE+1
+  sta (CURLINE),y
+
+  clc
+  lda NEXTFREE
+  sta CURLINE
+  adc #4
+  sta CURDATA
+  lda NEXTFREE+1
+  sta CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  lda #$0A          ; new line should be a blank line
+  sta (CURDATA)
+
+  clc
+  lda NEXTFREE
+  adc #84
+  sta NEXTFREE
+  lda NEXTFREE+1
+  adc #0
+  sta NEXTFREE+1
+
+  jsr paintdown
+  jsr addstatus
+  jsr moveto
+endopenline
   jmp editloop
+.)
 
 prevrow
 .(
@@ -922,6 +1091,7 @@ donothing
   jmp editloop
 
 scrollback
+.(
   ;; find a new SCREENSTART. start with the current one and go back
   ;; up to 15 lines (or until the start of the data).
 
@@ -962,6 +1132,7 @@ continue
 endloop
   stx temp
   plx
+.)
 
   lda SCRATCH
   sta SCREENSTART
@@ -1043,8 +1214,8 @@ lineloop
   pla
   sta SCRATCH+1
 
-  txa
-  jsr putax
+;  txa
+;  jsr putax
   dex
   bne lineloop
 endloop
