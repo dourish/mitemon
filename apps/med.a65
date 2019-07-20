@@ -965,19 +965,225 @@ delline
 ;;; breaking the current line in half.
 newline
 .(
-  ldy col           ; are we at the end of the line?
+  ldy col           ; where are we?
+  beq atstart       ; at start of line
   lda (CURDATA),y
-  cmp #$0A
+  cmp #$0A          ; at end of line?
   beq atend
-  jmp breakline
+  jmp breakline     ; otherwise, middle
+
+atstart
+  jsr linebeforesub
+
+  ;; at this point CURLINE points to the new blank line
+
+;  lda CURLINE       ; paint the blank line over prior text
+;  sta lower         ; the rest of the screen will be painted
+;  lda CURLINE+1     ; in a moment
+;  sta lower+1
+;  jsr paintrow
+  bra finishup
 
 atend
   ;; allocate a new blank line after this one
-  ;; set our next line's back pointer to the new line
+  jsr lineaftersub
+  ;; at this point CURLINE points to the old line
+
+finishup
+  jsr paintdown     ; repaint before resetting line
+
+  ;; set up lower line (either new or old) as the new current line
+  stz col
+  inc row           ; BUG BUG BUG SCROLL FORWARD IF AT END????  
+
+  ldy #1
+  lda (CURLINE)
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+
+  clc               ; set up CURDATA
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+;  lda #$0A          ; add end of line marker for new line
+;  sta (CURDATA)
+
+  jsr addstatus
+  jsr moveto
+  jmp editloop
+
+breakline
+;  jsr splitlinesub
+;  bra finishup  
+.)
+  jmp editloop
+
+;;; this code is shared between newline and openline. Splits a line
+;;; into two at the current point.
+splitlinesub
+  ;; make a new line. move the text after this point into the
+  ;; new line.
+  jsr lineaftersub
+
+  ldy #1            ; get this line's forward pointer
+  lda (CURLINE)
+  sta SCRATCH
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  lda (SCRATCH)     ; SCRATCH is now a pointer to the new line
+  pha
+  lda (SCRATCH),y
+  sta SCRATCH+1
+  pla
+  sta SCRATCH
+
+  ;; now make a pointer to data at the current insertion point
+  clc
+  lda CURLINE
+  adc col
+  adc #4
+  sta SCRATCH+2
+  lda CURDATA+1
+  adc #0
+  sta SCRATCH+3
+
+.(
+  ldy #4
+copyloop
+  lda (SCRATCH+2),y
+  sta (SCRATCH),y
+  cmp #$0A
+  beq done
+  iny
+  bra copyloop
+done
+.)
+
+  ldy col
+  lda #$0A
+  sta (CURDATA),y
+  rts  
+
+
+;;; open up a new line before the CURLINE and leave CURLINE pointing to
+;;; it. this is basically the behavior of open-line, although newline
+;;; uses it too. at end, CURLINE has been updated to the new, blank
+;;; line.
+linebeforesub
+  ;; so the steps are:
+  ;;   copy CURLINE's back pointer into the new line
+  ;;   set the new line's forward pointer to be CURLINE
+  ;;   set the forward pointer for the prior line to be the new line
+  ;;   set CURLINE's back pointer to be the new line
+  ;;   update CURLINE and CURDATA
+  ;;   update NEXTFREE
+  ;; to start with, NEXTFREE is the new line and CURLINE is the
+  ;; current one.
+
+  ;; make the new line a blank line
+  ldy #4
+  lda #$0A
+  sta (NEXTFREE),y
+
+  ldy #2
+  lda (CURLINE),y
+  sta SCRATCH       ; keep a copy, we will need it in a moment
+  sta (NEXTFREE),y
+  iny
+  lda (CURLINE),y
+  sta SCRATCH+1
+  sta (NEXTFREE),y
+
+  ldy #1
+  lda CURLINE
+  sta (NEXTFREE)
+  lda CURLINE+1
+  sta (NEXTFREE),y
+
+  lda NEXTFREE
+  sta (SCRATCH)
+  lda NEXTFREE+1
+  sta (SCRATCH),y
+
+  iny
+  lda NEXTFREE
+  sta (CURLINE),y
+  iny
+  lda NEXTFREE+1
+  sta (CURLINE),y
+
+  ;; before we trash CURLINE, check if we need to reset either or both
+  ;; of SCREENSTART and FIRSTLINE
+.(
+  lda CURLINE
+  cmp SCREENSTART
+  bne nope
+  lda CURLINE+1
+  cmp SCREENSTART+1
+  bne nope
+  lda NEXTFREE
+  sta SCREENSTART
+  lda NEXTFREE+1
+  sta SCREENSTART+1
+nope
+.)
+.(
+  lda CURLINE
+  cmp FIRSTLINE
+  bne nope
+  lda CURLINE+1
+  cmp FIRSTLINE+1
+  bne nope
+  lda NEXTFREE
+  sta FIRSTLINE
+  lda NEXTFREE+1
+  sta FIRSTLINE+1
+nope
+.)
+
+  clc
+  lda NEXTFREE
+  sta CURLINE
+  adc #4
+  sta CURDATA
+  lda NEXTFREE+1
+  sta CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  clc
+  lda NEXTFREE
+  adc #84
+  sta NEXTFREE
+  lda NEXTFREE+1
+  adc #0
+  sta NEXTFREE+1
+
+  rts
+
+
+;;; open a new blank line after the current line. at the end, CURLINE points
+;;; to the old line.
+lineaftersub
+.(
+  ;; allocate a new blank line after current line. So --
+  ;; set current next line's back pointer to the new line
   ;; set new line's forward pointer to that line
-  ;; grab our forward pointer and set it to the new line's
+  ;; grab our forward pointer and set it to the new line
   ;; set new line's backward pointer to us
   ;; reset NEXTFREE
+
+  ;; make the new line a blank line
+  ldy #4
+  lda #$0A
+  sta (NEXTFREE),y
 
   ldy #1            ; make a copy of pointer to next line
   lda (CURLINE)
@@ -1021,12 +1227,6 @@ atend
   lda NEXTFREE+1
   sta LASTLINE+1
 nope
-
-  lda NEXTFREE     ; reset CURLINE
-  sta CURLINE
-  lda NEXTFREE+1
-  sta CURLINE+1
-
   clc               ; update next available line
   lda NEXTFREE
   adc #84
@@ -1034,29 +1234,8 @@ nope
   lda NEXTFREE+1
   adc #0
   sta NEXTFREE+1
-
-  clc               ; set up CURDATA
-  lda CURLINE
-  adc #4
-  sta CURDATA
-  lda CURLINE+1
-  adc #0
-  sta CURDATA+1
-  lda #$0A          ; add end of line marker for new line
-  sta (CURDATA)
-
-  stz col
-  inc row           ; BUG BUG BUG SCROLL FORWARD IF AT END????  
-  jsr paintdown
-  jsr addstatus
-  jsr moveto
-  jmp editloop
-
-breakline
-  lda #"X
-  jsr ROMPUTCH
 .)
-  jmp editloop
+  rts
 
 nextrow
 .(
@@ -1146,93 +1325,10 @@ openline
 
 continue
   ;; allocate a new line and insert it where the current line is.
-  ;; so the steps are:
-  ;;   copy CURLINE's back pointer into the new line
-  ;;   set the new line's forward pointer to be CURLINE
-  ;;   set the forward pointer for the prior line to be the new line
-  ;;   set CURLINE's back pointer to be the new line
-  ;;   update CURLINE and CURDATA
-  ;;   update NEXTFREE
-  ;; to start with, NEXTFREE is the new line and CURLINE is the
-  ;; current one.
+  jsr linebeforesub
 
-  ldy #2
-  lda (CURLINE),y
-  sta SCRATCH       ; keep a copy, we will need it in a moment
-  sta (NEXTFREE),y
-  iny
-  lda (CURLINE),y
-  sta SCRATCH+1
-  sta (NEXTFREE),y
-
-  ldy #1
-  lda CURLINE
-  sta (NEXTFREE)
-  lda CURLINE+1
-  sta (NEXTFREE),y
-
-  lda NEXTFREE
-  sta (SCRATCH)
-  lda NEXTFREE+1
-  sta (SCRATCH),y
-
-  iny
-  lda NEXTFREE
-  sta (CURLINE),y
-  iny
-  lda NEXTFREE+1
-  sta (CURLINE),y
-
-  ;; before we trash CURLINE, check if we need to reset either or both
-  ;; of SCREENSTART and FIRSTLINE
-.(
-  lda CURLINE
-  cmp SCREENSTART
-  bne nope
-  lda CURLINE+1
-  cmp SCREENSTART+1
-  bne nope
-  lda NEXTFREE
-  sta SCREENSTART
-  lda NEXTFREE+1
-  sta SCREENSTART+1
-nope
-.)
-.(
-  lda CURLINE
-  cmp FIRSTLINE
-  bne nope
-  lda CURLINE+1
-  cmp FIRSTLINE+1
-  bne nope
-  lda NEXTFREE
-  sta FIRSTLINE
-  lda NEXTFREE+1
-  sta FIRSTLINE+1
-nope
-.)
-
-
-  clc
-  lda NEXTFREE
-  sta CURLINE
-  adc #4
-  sta CURDATA
-  lda NEXTFREE+1
-  sta CURLINE+1
-  adc #0
-  sta CURDATA+1
-
-  lda #$0A          ; new line should be a blank line
-  sta (CURDATA)
-
-  clc
-  lda NEXTFREE
-  adc #84
-  sta NEXTFREE
-  lda NEXTFREE+1
-  adc #0
-  sta NEXTFREE+1
+;  lda #$0A          ; new line should be a blank line
+;  sta (CURDATA)
 
   jsr paintdown
   jsr addstatus
@@ -1441,7 +1537,7 @@ prevpage
 filestart
   lda FIRSTLINE
   sta SCREENSTART
-  lda FIRSTLINE
+  lda FIRSTLINE+1
   sta SCREENSTART+1
 
   stz row
