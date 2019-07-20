@@ -959,7 +959,97 @@ donothing
 .)
 
 delline
+  lda (CURDATA)     ; is the line empty?
+  cmp #$0A
+  beq closeline     ; yes, so close it up
+
+  ldy col
+
+  ;; delete to end of line (and erase with spaces)
+  ldy col
+.(
+clearloop
+  lda (CURDATA),y
+  beq endclear
+  cmp #$0A
+  beq endclear
+  lda #0
+  sta (CURDATA),y
+  lda #32
+  jsr ROMPUTCH
+  cpy #MAXCOL
+  beq endclear
+  iny
+  bra clearloop
+endclear
+  ldy col
+  lda #$0A
+  sta (CURDATA),y
+  jsr moveto
   jmp editloop
+.)
+
+closeline
+  ;; BUG SPECIAL CASE FOR FIRST LINE!!!
+  ;; BUG SPECIAL CASE FOR LAST LINE!!!
+
+  ;; grab the forward pointer and then insert it as the forward
+  ;; pointer for the previous line.
+  ldy #1            ; make a copy of this forward pointer on the stack
+  lda (CURLINE),y
+  pha
+  lda (CURLINE)     ; LSB is on top of stack
+  pha
+
+  ldy #2            ; set up SCRATCH as a pointer to the last line
+  lda (CURLINE),y
+  sta SCRATCH
+  iny
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  ldy #1
+  pla               ; pull old fwd pointer off stack and write
+  sta (SCRATCH)     ; into fwd pointer for previous line
+  pla               ; LSB first then MSB
+  sta (SCRATCH),y
+
+  ;; now grab this line's backward pointer and make it the backward pointer
+  ;; for the following line
+  lda (CURLINE)     ; set up SCRATCH as pointer to next line
+  sta SCRATCH
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  ldy #2            ; write into backwards pointer
+  lda (CURLINE),y
+  sta (SCRATCH),y
+  iny
+  lda (CURLINE),y
+  sta (SCRATCH),y
+
+  lda (CURLINE)     ; update CURLINE and CURDATA to point to next line
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA
+
+  jsr paintdown
+  jsr addstatus
+  jmp editloop
+
+midline
+  ;; still to be implemented
+  jmp editloop
+
 
 ;;; newline opens and moves onto a new line below, potentially
 ;;; breaking the current line in half.
@@ -1011,24 +1101,23 @@ finishup
   lda CURLINE+1
   adc #0
   sta CURDATA+1
-;  lda #$0A          ; add end of line marker for new line
-;  sta (CURDATA)
 
   jsr addstatus
   jsr moveto
   jmp editloop
 
 breakline
-;  jsr splitlinesub
-;  bra finishup  
+  jsr splitlinesub
+  bra finishup  
 .)
   jmp editloop
 
 ;;; this code is shared between newline and openline. Splits a line
-;;; into two at the current point.
+;;; into two at the current point. Leaves CURLINE pointing to
+;;; the original line.
 splitlinesub
-  ;; make a new line. move the text after this point into the
-  ;; new line.
+  ;; make a new line. CURLINE remains unchanged. new line is blank
+  ;; with a traling NL.
   jsr lineaftersub
 
   ldy #1            ; get this line's forward pointer
@@ -1037,20 +1126,17 @@ splitlinesub
   lda (CURLINE),y
   sta SCRATCH+1
 
-  lda (SCRATCH)     ; SCRATCH is now a pointer to the new line
-  pha
-  lda (SCRATCH),y
-  sta SCRATCH+1
-  pla
-  sta SCRATCH
+  ;; we want to copy data from current insertion point to end of
+  ;; line. Make a pointer to the insertion point such that we can use
+  ;; Y as a pointer. Make both relative to the line structure so
+  ;; that the first character will be at Y=4.
 
   ;; now make a pointer to data at the current insertion point
   clc
   lda CURLINE
   adc col
-  adc #4
   sta SCRATCH+2
-  lda CURDATA+1
+  lda CURLINE+1
   adc #0
   sta SCRATCH+3
 
@@ -1209,13 +1295,13 @@ lineaftersub
   lda CURLINE
   sta (NEXTFREE),y
 
-  ldy #1
+  ldy #1            ; current line's forward pointer to new line
   lda NEXTFREE
   sta (CURLINE)
   lda NEXTFREE+1
   sta (CURLINE),y
 
-  ;; before we reset CURLINE, check if we need to reset LASTLINE
+  ;; Check if we need to reset LASTLINE
   lda LASTLINE
   cmp CURLINE
   bne nope
@@ -1320,32 +1406,31 @@ lineloop
 openline
 .(
   lda col           ; make sure we are at start of line
-  beq continue
-  jmp endopenline
+  beq atstart
 
-continue
+  ;; opening mid-line, so split line
+  jsr splitlinesub
+  bra finishopen
+
+atstart
   ;; allocate a new line and insert it where the current line is.
   jsr linebeforesub
 
-;  lda #$0A          ; new line should be a blank line
-;  sta (CURDATA)
-
+finishopen
   jsr paintdown
   jsr addstatus
   jsr moveto
-endopenline
   jmp editloop
 .)
 
 prevrow
 .(
-  ldy #2            ; do nothing if at first line of data
-  lda #<CURLINE     ; as signaled by line that points to itself in
-  cmp (CURLINE),y   ; its back-pointer
+  lda CURLINE       ; do nothing if at first line of data
+  cmp FIRSTLINE
   bne nextcheck
-  lda (CURLINE),y
-  cmp #>CURLINE
-  beq donothing  
+  lda CURLINE+1
+  cmp FIRSTLINE+1
+  beq donothing
 
 nextcheck
   lda row           ; top line of screen but prior data, so scroll back
