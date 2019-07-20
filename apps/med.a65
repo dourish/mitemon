@@ -1091,6 +1091,7 @@ continue
 
   jsr paintdown
   jsr addstatus
+  jsr moveto
   jmp editloop
 .)
 
@@ -1116,7 +1117,7 @@ atstart
 ;  lda CURLINE+1     ; in a moment
 ;  sta lower+1
 ;  jsr paintrow
-  bra finishup
+;  bra finishup
 
 atend
   ;; allocate a new blank line after this one
@@ -1124,12 +1125,14 @@ atend
   ;; at this point CURLINE points to the old line
 
 finishup
+
   jsr paintdown     ; repaint before resetting line
 
   ;; set up lower line (either new or old) as the new current line
   stz col
   inc row           ; BUG BUG BUG SCROLL FORWARD IF AT END????  
 
+nlfinish
   ldy #1
   lda (CURLINE)
   pha
@@ -1148,6 +1151,20 @@ finishup
 
   jsr addstatus
   jsr moveto
+
+  ;; do we need to scroll forward?
+  lda row
+  cmp #MAXROW
+  bne end
+  jsr scrollfwdsub
+  sec
+  lda row
+  sbc #12
+  sta row
+  jsr moveto
+  jmp repaint
+
+end
   jmp editloop
 
 breakline
@@ -1395,7 +1412,7 @@ nextrow
 
   lda row
   cmp #MAXROW       ; do nothing if we're on the last row
-  beq scrollfwd     ; BUG fix this once I want to scroll around
+  beq scrollfwd
 
   inc row
   ldy #1
@@ -1419,7 +1436,34 @@ donothing
  jmp editloop
 
 scrollfwd
+  jsr scrollfwdsub
 
+  ldy #1
+  lda (CURLINE)
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+  jsr moveto
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+  lda #10
+  sta row
+
+  jmp repaint
+.)
+
+;;; scroll forward is used by nextrow and also by newline as we approach
+;;; the bottom of the screen
+scrollfwdsub
+.(
   phx
   ldx #12
   lda SCREENSTART
@@ -1444,27 +1488,7 @@ lineloop
   lda SCRATCH+1
   sta SCREENSTART+1
 
-  ldy #1
-  lda (CURLINE)
-  pha
-  lda (CURLINE),y
-  sta CURLINE+1
-  pla
-  sta CURLINE
-  jsr moveto
-
-  clc
-  lda CURLINE
-  adc #4
-  sta CURDATA
-  lda CURLINE+1
-  adc #0
-  sta CURDATA+1
-
-  lda #10
-  sta row
-
-  jmp repaint
+  rts
 .)
 
 openline
@@ -1600,8 +1624,13 @@ endloop
 .)
 
 testcode
-  jsr fillbuffer
-  jmp editloop
+  jsr scrollfwdsub
+  sec
+  lda row
+  sbc #12
+  sta row
+  jsr moveto
+  jmp repaint
 
 test2
   txa
