@@ -575,9 +575,11 @@ emptyfile
 editstart
   lda #<DATASTART   ; set up CURLINE to point to start of data
   sta CURLINE
+  sta FIRSTLINE
   sta SCREENSTART
   lda #>DATASTART
   sta CURLINE+1
+  sta FIRSTLINE+1
   sta SCREENSTART+1
   clc               ; set up CURDATA to point to data for CURLINE
   lda CURLINE
@@ -963,9 +965,9 @@ delline
   cmp #$0A
   beq closeline     ; yes, so close it up
 
-  ldy col
+  ;; not the first line, so delete to the end of the line, erasing
+  ;; as we go with spaces
 
-  ;; delete to end of line (and erase with spaces)
   ldy col
 .(
 clearloop
@@ -983,16 +985,41 @@ clearloop
   bra clearloop
 endclear
   ldy col
-  lda #$0A
+  lda #$0A          ; make sure line is terminated properly
   sta (CURDATA),y
   jsr moveto
   jmp editloop
 .)
 
 closeline
-  ;; BUG SPECIAL CASE FOR FIRST LINE!!!
+.(
   ;; BUG SPECIAL CASE FOR LAST LINE!!!
 
+  ;; check if this was the first line of the text
+  lda CURLINE
+  cmp FIRSTLINE
+  bne notfirst
+  lda CURLINE+1
+  cmp FIRSTLINE+1
+  bne notfirst
+
+  ;; yes, it was. so reset FIRSTLINE and tweak the new first line's
+  ;; back pointer to point to itself.
+  ldy #1
+  lda (CURLINE)
+  sta FIRSTLINE
+  lda (CURLINE),y
+  sta FIRSTLINE+1
+
+  ldy #2
+  lda FIRSTLINE
+  sta (FIRSTLINE),y
+  iny
+  lda FIRSTLINE+1
+  sta (FIRSTLINE),y
+  bra continue
+
+notfirst
   ;; grab the forward pointer and then insert it as the forward
   ;; pointer for the previous line.
   ldy #1            ; make a copy of this forward pointer on the stack
@@ -1014,6 +1041,23 @@ closeline
   pla               ; LSB first then MSB
   sta (SCRATCH),y
 
+  ;; if we are deleting the LAST line, then reset LASTLINE
+  lda LASTLINE
+  cmp CURLINE
+  bne continue
+  lda LASTLINE+1
+  cmp CURLINE+1
+  bne continue
+
+  ldy #2
+  lda (CURLINE),y
+  sta LASTLINE
+  iny
+  lda (CURLINE),y
+  sta LASTLINE+1
+  bra continue
+
+notlast
   ;; now grab this line's backward pointer and make it the backward pointer
   ;; for the following line
   lda (CURLINE)     ; set up SCRATCH as pointer to next line
@@ -1027,6 +1071,9 @@ closeline
   iny
   lda (CURLINE),y
   sta (SCRATCH),y
+
+
+continue
 
   lda (CURLINE)     ; update CURLINE and CURDATA to point to next line
   pha
@@ -1045,10 +1092,7 @@ closeline
   jsr paintdown
   jsr addstatus
   jmp editloop
-
-midline
-  ;; still to be implemented
-  jmp editloop
+.)
 
 
 ;;; newline opens and moves onto a new line below, potentially
@@ -1178,35 +1222,62 @@ linebeforesub
   lda #$0A
   sta (NEXTFREE),y
 
-  ldy #2
+  ldy #2            ; get CURLINE's back pointer
   lda (CURLINE),y
   sta SCRATCH       ; keep a copy, we will need it in a moment
-  sta (NEXTFREE),y
+  sta (NEXTFREE),y  ; meantime, reset it to the new line.
   iny
   lda (CURLINE),y
   sta SCRATCH+1
   sta (NEXTFREE),y
 
-  ldy #1
+  ldy #1            ; set the new line's forward pointer to CURLINE
   lda CURLINE
   sta (NEXTFREE)
   lda CURLINE+1
   sta (NEXTFREE),y
 
+.(
+  ;; we were already at the first line?
+  lda CURLINE
+  cmp FIRSTLINE
+  bne notfirst
+  lda CURLINE+1
+  cmp FIRSTLINE+1
+  bne notfirst
+
+  ;; we are the new first line. and there is no useful back pointer
   lda NEXTFREE
-  sta (SCRATCH)
+  sta FIRSTLINE
+  lda NEXTFREE+1
+  sta FIRSTLINE+1
+
+  ;; set new line's back pointer to itself
+  ldy #2
+  lda NEXTFREE
+  sta (NEXTFREE),y
+  iny
+  lda NEXTFREE+1
+  sta (NEXTFREE),y
+  bra continue
+
+notfirst
+  ldy #1
+  lda NEXTFREE      ; set prior line's forward pointer to new line
+  sta (SCRATCH)     ; only makes sense when not new first line
   lda NEXTFREE+1
   sta (SCRATCH),y
 
-  iny
+continue
+  ldy #2            ; set current line's back pointer to new line
   lda NEXTFREE
   sta (CURLINE),y
   iny
   lda NEXTFREE+1
   sta (CURLINE),y
+.)
 
-  ;; before we trash CURLINE, check if we need to reset either or both
-  ;; of SCREENSTART and FIRSTLINE
+  ;; check if we need to reset SCREENSTART
 .(
   lda CURLINE
   cmp SCREENSTART
@@ -1218,19 +1289,6 @@ linebeforesub
   sta SCREENSTART
   lda NEXTFREE+1
   sta SCREENSTART+1
-nope
-.)
-.(
-  lda CURLINE
-  cmp FIRSTLINE
-  bne nope
-  lda CURLINE+1
-  cmp FIRSTLINE+1
-  bne nope
-  lda NEXTFREE
-  sta FIRSTLINE
-  lda NEXTFREE+1
-  sta FIRSTLINE+1
 nope
 .)
 
@@ -1271,6 +1329,12 @@ lineaftersub
   lda #$0A
   sta (NEXTFREE),y
 
+  lda NEXTFREE
+  sta LASTLINE
+  lda NEXTFREE+1
+  sta LASTLINE+1
+
+notlast
   ldy #1            ; make a copy of pointer to next line
   lda (CURLINE)
   sta SCRATCH
