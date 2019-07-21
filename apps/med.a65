@@ -65,8 +65,8 @@ MAXDATA     .byte 0
 SCREENSTART .word 0 ; points to line structure for first line on screen
 
 NROWS=24
-MAXROW=NROWS-3
-SENTINELROW=MAXROW+2
+MAXROW=NROWS-2
+SENTINELROW=MAXROW+1
 NCOLS=80
 MAXCOL=NCOLS-1
 
@@ -774,7 +774,7 @@ addstatus
   jsr ROMPUTCH
   lda #$5B ; [
   jsr ROMPUTCH
-  lda #23
+  lda #24
   jsr todecimal
   lda #$3B  ; semic
   jsr ROMPUTCH
@@ -782,14 +782,58 @@ addstatus
   jsr todecimal
   lda #$48  ; H
   jsr ROMPUTCH
-  lda #$2b  ; +
-  jsr ROMPUTCH
-  ldy #78
 statusloop
   lda #"-
   jsr ROMPUTCH
+  jsr ROMPUTCH
+  jsr ROMPUTCH
+  lda PRISTINE
+  bne step2
+  lda #"*
+step2
+  jsr ROMPUTCH
+  jsr ROMPUTCH
+  lda #"-
+  jsr ROMPUTCH
+  lda #32
+  jsr ROMPUTCH
+step3
+  ldy #1
+step4
+  lda WORD,y
+  jsr ROMPUTCH
+  iny
+  cpy WORD
+  bne step4
+step5
+  lda #32
+  jsr ROMPUTCH
+  lda #"-
+  ldy #5
+step5a
+  jsr ROMPUTCH
   dey
-  bne statusloop
+  bne step5a
+step6
+  lda #$1B ; ESC
+  jsr ROMPUTCH
+  lda #$5B ; [
+  jsr ROMPUTCH
+  lda #24
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr ROMPUTCH
+  lda #65
+  jsr todecimal
+  lda #$48  ; H
+  jsr ROMPUTCH
+step7
+  ldy #14
+  lda #"-
+step7a
+  jsr ROMPUTCH
+  dey
+  bne step7a
   lda #$2b  ; +
   jsr ROMPUTCH
   rts
@@ -1411,7 +1455,7 @@ nextrow
   beq donothing
 
   lda row
-  cmp #MAXROW       ; do nothing if we're on the last row
+  cmp #MAXROW       ; if we're on the last row, scroll forward
   beq scrollfwd
 
   inc row
@@ -1639,7 +1683,6 @@ test2
 
 exit
   lda #NROWS
-  dec
   sta row
   stz col
   jsr moveto
@@ -1657,7 +1700,6 @@ nextpage
   phx
 
   ldx #NROWS
-  dex
   dex
   dex
 
