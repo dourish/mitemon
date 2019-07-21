@@ -1808,10 +1808,68 @@ doexit
   rts
 
 fowdword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+findword
+  lda (CURDATA),y
+  beq atend
+  cmp #$0A
+  beq atend
+  cmp #$20
+  bne findend
+  iny
+  cpy #MAXCOL
+  beq atend
+  bra findword
+findend
+  ;; now find the end of the word
+  lda (CURDATA),y
+  beq atend
+  cmp #$0A
+  beq atend
+  cmp #$20
+  beq found  
+  iny
+  cpy #MAXCOL
+  bne findend
+found  
+atend
+  sty col
+  jsr moveto
   jmp editloop
+.)
 
 backword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+  beq donebackword
+findword
+  lda (CURDATA),y
+  beq nextchar
+  cmp #$20
+  bne findstart
+nextchar
+  dey
+  beq startofline
+  bra findword
+findstart
+  ;; now find the start of the word
+  lda (CURDATA),y
+  beq startofline
+  cmp #$20
+  beq found  
+  dey
+  bne findstart
+found  
+startofline
+  sty col
+  jsr moveto
+donebackword
   jmp editloop
+.)
+
 
 nextpage
 .(
