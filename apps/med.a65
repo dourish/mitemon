@@ -94,14 +94,14 @@ table
   .word prevrow     ; p
   .word undefined   ; q
   .word undefined   ; r
-  .word save        ; s
+  .word undefined   ; s
   .word testcode    ; t
   .word undefined   ; u
   .word nextpage    ; v
   .word undefined   ; w
-  .word exit        ; x
+  .word extended    ; x
   .word undefined   ; y
-  .word test2       ; z
+  .word undefined   ; z
 
 
 start
@@ -838,12 +838,69 @@ step7a
   jsr ROMPUTCH
   rts
 
+prtmessage
+.(
+  lda #$1B ; ESC
+  jsr ROMPUTCH
+  lda #$5B ; [
+  jsr ROMPUTCH
+  lda #25
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr ROMPUTCH
+  lda #1
+  jsr todecimal
+  lda #$48  ; H
+  jsr ROMPUTCH
+  lda #$1B ; ESC    ; ESC-[K clears to end of line
+  jsr ROMPUTCH
+  lda #$5B ; [
+  jsr ROMPUTCH
+  lda #"K
+  jsr ROMPUTCH
+  phy
+  ldy #0
+loop
+  lda (PRINTVEC),y
+  beq done
+  jsr ROMPUTCH
+  iny
+  bne loop
+done
+  ply
+  jsr moveto
+  rts
+.)
+
+clrmessage
+  lda #$1B ; ESC
+  jsr ROMPUTCH
+  lda #$5B ; [
+  jsr ROMPUTCH
+  lda #25
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr ROMPUTCH
+  lda #1
+  jsr todecimal
+  lda #$48  ; H
+  jsr ROMPUTCH
+  lda #$1B ; ESC    ; ESC-[K clears to end of line
+  jsr ROMPUTCH
+  lda #$5B ; [
+  jsr ROMPUTCH
+  lda #"K
+  jsr ROMPUTCH
+  jsr moveto
+  rts
+
 
 ;;;
 ;;; *** EDITOR COMMANDS
 ;;;
 
 insert
+  stz PRISTINE
   pha
   ldy col
   lda (CURDATA),y
@@ -928,6 +985,7 @@ undefined
 ;;; we are at the end of the line
 delfwd
 .(
+  stz PRISTINE
   ldy col
   lda (CURDATA),y
   beq nodelete
@@ -995,6 +1053,7 @@ donothing
 ;;; delete character backwards
 delback
 .(
+  stz PRISTINE
   lda col
   beq donothing
   dec col
@@ -1005,6 +1064,7 @@ donothing
 .)
 
 delline
+  stz PRISTINE
   lda (CURDATA)     ; is the line empty?
   cmp #$0A
   beq closeline     ; yes, so close it up
@@ -1119,6 +1179,22 @@ notlast
 
 continue
 
+  ldy #1
+
+  ;; reset SCREENSTART if necessary
+  lda CURLINE
+  cmp SCREENSTART
+  bne skip
+  lda CURLINE+1
+  cmp SCREENSTART+1
+  bne skip
+
+  lda (CURLINE)
+  sta SCREENSTART
+  lda (CURLINE),y
+  sta SCREENSTART+1
+  
+skip
   lda (CURLINE)     ; update CURLINE and CURDATA to point to next line
   pha
   lda (CURLINE),y
@@ -1144,6 +1220,7 @@ continue
 ;;; breaking the current line in half.
 newline
 .(
+  stz PRISTINE
   ldy col           ; where are we?
   beq atstart       ; at start of line
   lda (CURDATA),y
@@ -1537,6 +1614,7 @@ lineloop
 
 openline
 .(
+  stz PRISTINE
   lda col           ; make sure we are at start of line
   beq atstart
 
@@ -1668,20 +1746,61 @@ endloop
 .)
 
 testcode
-  jsr scrollfwdsub
-  sec
-  lda row
-  sbc #12
-  sta row
-  jsr moveto
-  jmp repaint
-
-test2
-  txa
-  jsr putax
+  clc
+  lda PRISTINE
+  adc #"0
+  jsr ROMPUTCH
   jmp editloop
 
+extended
+  lda #<ctrlxmsg
+  sta PRINTVEC
+  lda #>ctrlxmsg
+  sta PRINTVEC+1
+  jsr prtmessage
+  jsr ROMGETCH
+  cmp #19           ; ^S
+  beq ctrls
+  cmp #3            ; ^C
+  beq ctrlc
+  jsr clrmessage
+  jmp editloop
+
+ctrls
+  jsr savefile
+  lda #<savedmsg
+  sta PRINTVEC
+  lda #>savedmsg
+  sta PRINTVEC+1
+  jsr prtmessage
+  jsr moveto
+  jmp editloop
+
+ctrlc
+  jmp exit
+
+ctrlxmsg   .byte "C-x-", $00
+savedmsg   .byte "Saved", $00
+unsavedmsg .byte "Discard unsaved changes?", $00
+
 exit
+  lda PRISTINE
+  bne doexit
+  lda #<unsavedmsg
+  sta PRINTVEC
+  lda #>unsavedmsg
+  sta PRINTVEC+1
+  jsr prtmessage
+  jsr ROMGETCH
+  cmp #"y
+  beq doexit
+  cmp #"Y
+  beq doexit
+  jsr clrmessage
+  jmp editloop
+
+doexit
+  jsr clrmessage
   lda #NROWS
   sta row
   stz col
@@ -1918,6 +2037,8 @@ TMPY=MAXDATA        ; reusing/renaming from earlier
 
 savefile
 .(
+  lda #1
+  sta PRISTINE
   ldx SAVEX         ; restore the stack pointer
 
   lda CLUSTER       ; new file or existing?
