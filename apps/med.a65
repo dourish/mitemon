@@ -21,6 +21,8 @@ WORD=$7EC0
 LBLOCK=$7C00
 HBLOCK=$7D00
 IOSENTINEL=$7E00
+KILLLINE=$7F80      ; and 7F81
+KILLBUFFER=$7F82    ; upper half of FORTH input buffer
 
 sdsavebuf=$e1d0
 
@@ -40,6 +42,10 @@ DATAEND=$7C00       ; end of data storage
 
 ;;; the $0070 area is used by FORTH but not for anything that might run
 ;;; while the editor is running, so is safe to reuse.
+MARKROW=$0040   ; and 0041
+MARKCOL=$0042
+KILLSTART=$0043 ; and 0044
+KILLEND=$0045   ; and 0046
 PRISTINE=$004C
 SAVEX=$004D
 FIRSTLINE=$004E ; and 004F
@@ -65,7 +71,8 @@ MAXDATA     .byte 0
 SCREENSTART .word 0 ; points to line structure for first line on screen
 
 NROWS=24
-MAXROW=NROWS-2
+MAXROW=NROWS-3
+SCROLLROW=MAXROW
 SENTINELROW=MAXROW+1
 NCOLS=80
 MAXCOL=NCOLS-1
@@ -100,7 +107,7 @@ table
   .word nextpage    ; v
   .word undefined   ; w
   .word extended    ; x
-  .word undefined   ; y
+  .word yank        ; y
   .word undefined   ; z
 
 
@@ -596,6 +603,15 @@ warmstart
   jsr home
   stz row
   stz col
+  stz MARKROW
+  stz MARKROW+1
+  stz MARKCOL
+  stz KILLSTART
+  stz KILLSTART+1
+  stz KILLEND
+  stz KILLEND+1
+  stz KILLLINE
+  stz KILLLINE+1
 
   stx SAVEX         ; preserve the stack pointer
   jmp repaint       ; repaint will then jump into editloop below
@@ -774,7 +790,7 @@ addstatus
   jsr ROMPUTCH
   lda #$5B ; [
   jsr ROMPUTCH
-  lda #24
+  lda #23
   jsr todecimal
   lda #$3B  ; semic
   jsr ROMPUTCH
@@ -790,7 +806,10 @@ statusloop
   lda PRISTINE
   bne step2
   lda #"*
+  bra step2a
 step2
+  lda #"-
+step2a
   jsr ROMPUTCH
   jsr ROMPUTCH
   lda #"-
@@ -819,7 +838,7 @@ step6
   jsr ROMPUTCH
   lda #$5B ; [
   jsr ROMPUTCH
-  lda #24
+  lda #23
   jsr todecimal
   lda #$3B  ; semic
   jsr ROMPUTCH
@@ -844,7 +863,7 @@ prtmessage
   jsr ROMPUTCH
   lda #$5B ; [
   jsr ROMPUTCH
-  lda #25
+  lda #24
   jsr todecimal
   lda #$3B  ; semic
   jsr ROMPUTCH
@@ -877,7 +896,7 @@ clrmessage
   jsr ROMPUTCH
   lda #$5B ; [
   jsr ROMPUTCH
-  lda #25
+  lda #24
   jsr todecimal
   lda #$3B  ; semic
   jsr ROMPUTCH
@@ -979,6 +998,7 @@ donothing
 .)
 
 undefined
+  ;; ignore any undefined input.
   jmp editloop
 
 ;;; delete character forward. remove character under the cursor unless
@@ -1063,14 +1083,45 @@ donothing
   jmp editloop
 .)
 
+;;; delete (kill) a line. a regular kill erases all characters
+;;; to the end of the line. a kill on a blank line removes the
+;;; line altogether. some further complications are added by the
+;;; potential need to yank back text later for copy/paste
 delline
   stz PRISTINE
   lda (CURDATA)     ; is the line empty?
   cmp #$0A
   beq closeline     ; yes, so close it up
 
-  ;; not the first line, so delete to the end of the line, erasing
-  ;; as we go with spaces
+.(
+  lda col
+  bne zerobuffer    ; no copy when kill begins mid-line
+
+  ;; we're at the start of the line. Make a copy of the data in case we
+  ;; need to yank it back later.
+  ldy #0
+copyloop
+  lda (CURDATA),y
+  sta KILLBUFFER,y
+  cmp #$0A
+  beq endcopy
+  iny
+  cpy #80
+  bne copyloop
+endcopy
+  lda CURLINE
+  sta KILLLINE
+  lda CURLINE+1
+  sta KILLLINE+1
+  bra nocopy
+
+zerobuffer
+  stz KILLLINE
+  stz KILLLINE+1
+
+nocopy
+.)
+  ;; delete to the end of the line, erasing as we go with spaces
 
   ldy col
 .(
@@ -1096,6 +1147,53 @@ endclear
 .)
 
 closeline
+.(
+  ;; is this the line we just erased? if so, copy data back
+  lda CURLINE
+  cmp KILLLINE
+  bne nocopy
+  lda CURLINE+1
+  cmp KILLLINE+1
+  bne nocopy
+  ldy #0
+copyloop
+  lda KILLBUFFER,y
+  sta (CURDATA),y
+  cmp #$0A          ; stop after copying a newline
+  beq nocopy
+  iny
+  cpy #80           ; stop after 80 characters
+  bne copyloop
+
+nocopy
+  ;; now see about extending the kill buffer
+  lda KILLSTART     ; if KILLSTART is zero, reset
+  ora KILLSTART+1
+  beq resetkill
+
+  ldy #1            ; test if this kill extends the kill buffer
+  lda (KILLEND)
+  cmp CURLINE
+  bne resetkill     ; no match, so not extending
+  lda (KILLEND),y
+  cmp CURLINE+1
+  bne resetkill     ; no match, so not extending
+  lda CURLINE       ; set this line to be the new end of the kill buffer
+  sta KILLEND
+  lda CURLINE+1
+  sta KILLEND+1
+  bra skipreset
+
+resetkill
+  lda CURLINE       ; set this line to both start and end of kill buffer
+  sta KILLSTART
+  sta KILLEND
+  lda CURLINE+1
+  sta KILLSTART+1
+  sta KILLEND+1
+skipreset
+.)
+
 .(
   ;; BUG SPECIAL CASE FOR LAST LINE!!!
 
@@ -1148,12 +1246,12 @@ notfirst
   ;; if we are deleting the LAST line, then reset LASTLINE
   lda LASTLINE
   cmp CURLINE
-  bne continue
+  bne notlast
   lda LASTLINE+1
   cmp CURLINE+1
-  bne continue
+  bne notlast
 
-  ldy #2
+  ldy #2            ; new last line is previous line (ie our back pointer)
   lda (CURLINE),y
   sta LASTLINE
   iny
@@ -1216,6 +1314,40 @@ skip
 .)
 
 
+;;; yank. restore text from the kill buffer.
+;;; for now, just bring back the first line (to see if this works
+;;; at all.)
+yank
+  ;; open line above
+  jsr linebeforesub
+  ;; at this point CURLINE points to the new blank line
+
+  ;; copy text from first kill line
+  lda KILLSTART
+  sta SCRATCH
+  lda KILLSTART+1
+  sta SCRATCH+1
+
+.(
+  ldy #4
+copyloop
+  lda (SCRATCH),y
+  sta (CURLINE),y
+  beq endcopy
+  cmp #$0A
+  beq endcopy
+  iny
+  cpy #84
+  bne copyloop
+endcopy
+.)
+
+  jsr paintdown     ; repaint before resetting line
+  stz col
+  inc row           ; lower of old/new line becomes the current line
+  bra nlfinish      ; reuse code from newline  
+
+
 ;;; newline opens and moves onto a new line below, potentially
 ;;; breaking the current line in half.
 newline
@@ -1230,31 +1362,24 @@ newline
 
 atstart
   jsr linebeforesub
-
   ;; at this point CURLINE points to the new blank line
 
-;  lda CURLINE       ; paint the blank line over prior text
-;  sta lower         ; the rest of the screen will be painted
-;  lda CURLINE+1     ; in a moment
-;  sta lower+1
-;  jsr paintrow
-;  bra finishup
+  bra finishup
 
 atend
   ;; allocate a new blank line after this one
   jsr lineaftersub
-  ;; at this point CURLINE points to the old line
 
+  ;; at this point CURLINE points to the old line
+.)
 finishup
 
   jsr paintdown     ; repaint before resetting line
-
-  ;; set up lower line (either new or old) as the new current line
   stz col
-  inc row           ; BUG BUG BUG SCROLL FORWARD IF AT END????  
+  inc row           ; lower of old/new line becomes the current line
 
 nlfinish
-  ldy #1
+  ldy #1            ; update CURLINE
   lda (CURLINE)
   pha
   lda (CURLINE),y
@@ -1275,7 +1400,7 @@ nlfinish
 
   ;; do we need to scroll forward?
   lda row
-  cmp #MAXROW
+  cmp #SCROLLROW
   bne end
   jsr scrollfwdsub
   sec
@@ -1291,8 +1416,6 @@ end
 breakline
   jsr splitlinesub
   bra finishup  
-.)
-  jmp editloop
 
 ;;; this code is shared between newline and openline. Splits a line
 ;;; into two at the current point. Leaves CURLINE pointing to
@@ -1746,10 +1869,16 @@ endloop
 .)
 
 testcode
-  clc
-  lda PRISTINE
-  adc #"0
-  jsr ROMPUTCH
+;  lda CURDATA
+;  sta MARKROW
+;  lda CURDATA+1
+;  sta MARKROW+1
+;  lda col
+;  sta MARKCOL
+  lda KILLSTART+1
+  jsr putax
+  lda KILLSTART
+  jsr putax
   jmp editloop
 
 extended
@@ -1773,6 +1902,7 @@ ctrls
   lda #>savedmsg
   sta PRINTVEC+1
   jsr prtmessage
+  jsr addstatus
   jsr moveto
   jmp editloop
 
@@ -2004,6 +2134,7 @@ lineloop
 
 save
   jsr savefile
+  jsr addstatus
   jmp editloop
 
 
