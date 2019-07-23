@@ -1315,29 +1315,40 @@ skip
 
 
 ;;; yank. restore text from the kill buffer.
-;;; for now, just bring back the first line (to see if this works
-;;; at all.)
+;;; 
+;;; YANK works with DELLINE to maintain and manage a kill buffer.
+;;; The basic mechanism is that a contiguous block of deleted text
+;;; is maintained, delimited by the pointers KILLSTART and KILLEND,
+;;; which point to the deleted line structures. Their internal linkages
+;;; are maintained. So when we do a YANK, we follow the pointer chain
+;;; from beginning to end, copying text back in.
 yank
+  lda KILLSTART     ; nothing to yank?
+  ora KILLSTART+1
+  beq endyank
+
+  ;; set up to copy text from first kill line. using SCRATCH+4
+  ;; because linebeforesub uses SCRATCH.
+  lda KILLSTART
+  sta SCRATCH+4
+  lda KILLSTART+1
+  sta SCRATCH+5
+
+yankloop
+.(
   ;; open line above
   jsr linebeforesub
   ;; at this point CURLINE points to the new blank line
 
-  ;; copy text from first kill line
-  lda KILLSTART
-  sta SCRATCH
-  lda KILLSTART+1
-  sta SCRATCH+1
-
-.(
   ldy #4
 copyloop
-  lda (SCRATCH),y
+  lda (SCRATCH+4),y
   sta (CURLINE),y
-  beq endcopy
-  cmp #$0A
+  beq endcopy       ; end after copying a null
+  cmp #$0A          ; end after copying a newline
   beq endcopy
   iny
-  cpy #84
+  cpy #84           ; end after 80 characters
   bne copyloop
 endcopy
 .)
@@ -1345,7 +1356,59 @@ endcopy
   jsr paintdown     ; repaint before resetting line
   stz col
   inc row           ; lower of old/new line becomes the current line
-  bra nlfinish      ; reuse code from newline  
+
+  ldy #1            ; update CURLINE
+  lda (CURLINE)
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+
+  clc               ; set up CURDATA -- move to ENDYANK?
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  jsr addstatus
+  jsr moveto
+
+  ;; do we need to scroll forward? (scrollfwdsub also trashes SCRATCH)
+  lda row
+  cmp #SCROLLROW
+  bne morerows
+  jsr scrollfwdsub
+  sec
+  lda row
+  sbc #12
+  sta row
+  jsr moveto
+
+morerows
+  ;; another row to paste?
+  lda SCRATCH+4
+  cmp KILLEND
+  bne notdone
+  lda SCRATCH+5
+  cmp KILLEND+1
+  beq endyank
+notdone
+
+  ldy #1            ; move SCRATCH pointer forward along link chain
+  lda (SCRATCH+4)
+  pha
+  lda (SCRATCH+4),y
+  sta SCRATCH+5
+  pla
+  sta SCRATCH+4
+  jmp yankloop
+
+endyank
+  jmp repaint
+
 
 
 ;;; newline opens and moves onto a new line below, potentially
@@ -1878,6 +1941,12 @@ testcode
   lda KILLSTART+1
   jsr putax
   lda KILLSTART
+  jsr putax
+  lda #",
+  jsr ROMPUTCH
+  lda KILLEND+1
+  jsr putax
+  lda KILLEND
   jsr putax
   jmp editloop
 
