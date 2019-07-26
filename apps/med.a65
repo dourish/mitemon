@@ -1353,7 +1353,7 @@ copyloop
 endcopy
 .)
 
-  jsr paintdown     ; repaint before resetting line
+;  jsr paintdown     ; repaint before resetting line
   stz col
   inc row           ; lower of old/new line becomes the current line
 
@@ -1365,16 +1365,8 @@ endcopy
   pla
   sta CURLINE
 
-  clc               ; set up CURDATA -- move to ENDYANK?
-  lda CURLINE
-  adc #4
-  sta CURDATA
-  lda CURLINE+1
-  adc #0
-  sta CURDATA+1
-
-  jsr addstatus
-  jsr moveto
+;  jsr addstatus
+;  jsr moveto
 
   ;; do we need to scroll forward? (scrollfwdsub also trashes SCRATCH)
   lda row
@@ -1385,7 +1377,7 @@ endcopy
   lda row
   sbc #12
   sta row
-  jsr moveto
+;  jsr moveto
 
 morerows
   ;; another row to paste?
@@ -1404,9 +1396,19 @@ notdone
   sta SCRATCH+5
   pla
   sta SCRATCH+4
-  jmp yankloop
+  bra yankloop
 
 endyank
+  clc               ; set up CURDATA -- move to ENDYANK?
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  jsr addstatus
+  jsr moveto
   jmp repaint
 
 
@@ -1932,22 +1934,12 @@ endloop
 .)
 
 testcode
-;  lda CURDATA
-;  sta MARKROW
-;  lda CURDATA+1
-;  sta MARKROW+1
-;  lda col
-;  sta MARKCOL
-  lda KILLSTART+1
-  jsr putax
-  lda KILLSTART
-  jsr putax
-  lda #",
-  jsr ROMPUTCH
-  lda KILLEND+1
-  jsr putax
-  lda KILLEND
-  jsr putax
+  lda CURDATA
+  sta MARKROW
+  lda CURDATA+1
+  sta MARKROW+1
+  lda col
+  sta MARKCOL
   jmp editloop
 
 extended
@@ -2151,7 +2143,95 @@ filestart
   sta CURDATA+1
   jmp repaint
 
+
+;;; move cursor to the end of the file, which most likely involves
+;;; repositinging the screen so that the last line is included.
 fileend
+
+  lda LASTLINE      ; set up SCRATCH. will count back from
+  sta SCRATCH       ; LASTLINE to find the new start of screen.
+  lda LASTLINE+1
+  sta SCRATCH+1
+
+  stz SCRATCH+2     ; keep track of how far back from end of screen
+  ldy #2            
+
+moveloop
+  lda SCRATCH       ; have we reached start of screen?
+  cmp SCREENSTART
+  bne moveback      ; no, so continue to move back
+  lda SCRATCH+1
+  cmp SCREENSTART+1
+  beq hitstart      ; yes we have hit the start
+moveback
+  lda (SCRATCH),y   ; follow backwards pointer
+  pha
+  iny
+  lda (SCRATCH),y
+  sta SCRATCH+1
+  pla
+  sta SCRATCH
+  dey
+  lda SCRATCH+2     ; stop after we have moved back 19 times
+  inc
+  cmp #19
+  beq hitmax        ; 19 lines back from end is max
+  sta SCRATCH+2
+  bra moveloop
+
+hitmax
+  ;; if we get here, we have identified line n-19.
+  ;; reposition screen, then reposition cursor
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+  lda #19
+  sta row
+  bra windup
+
+hitstart
+  ;; if we get here, we hit the start of the screen before moving
+  ;; back 20 lines, ie, the last line is already on the screen.
+  ;; SCRATCH+2 tells us how many lines between screenstart and the end
+  ;; so set row to that.
+  lda SCRATCH+2
+  sta row
+
+windup
+  lda LASTLINE
+  sta CURLINE
+  lda LASTLINE+1
+  sta CURLINE+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  ;; move cursor to the end of that line
+  ldy #0
+.(
+loop
+  lda (CURDATA),y
+  beq done
+  cmp #$0A
+  beq done
+  cpy #79
+  beq done
+  iny
+  bra loop
+done
+.)
+  sty col
+  jsr moveto
+  jmp repaint
+
+
+#if 0
+  OLD FILEEND CODE
 .(
   ;; jump to a point about 10 lines from the end of the file
 
@@ -2200,6 +2280,8 @@ lineloop
   sta CURDATA+1
   jmp repaint
 .)
+#endif
+
 
 save
   jsr savefile
