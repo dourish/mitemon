@@ -1884,9 +1884,9 @@ doinca
   jmp endline
 
 dodeca
-  lda #'I
+  lda #'D
   jsr puta
-  lda #'N
+  lda #'E
   jsr puta
   lda #'C
   jsr puta

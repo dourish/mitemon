@@ -24,9 +24,6 @@ BUFFER      = $0036 ; and $0037
 XBUFFER     = $4000
 XSENTINEL   = $4200
 
-;;; entry points for some ROM functions. TO DO -- migrate into jump table
-sdsavebuf=$e1d0
-
   jmp start
 
 CLUSTER  .word 0
@@ -209,7 +206,7 @@ filesetup
   inx
 
   ;; flush the directory block, removing sector number from stack
-  jsr sdsavebuf
+  jsr ROMSDSAVBUF
 
 ;  jsr ROMPRTSTCK    ; debugging
 ;  jsr crlf

@@ -24,8 +24,6 @@ IOSENTINEL=$7E00
 KILLLINE=$7F80      ; and 7F81
 KILLBUFFER=$7F82    ; upper half of FORTH input buffer
 
-sdsavebuf=$e1d0
-
 
 ;;; Data structures/Rationale
 ;;;
@@ -1148,7 +1146,8 @@ endclear
 
 closeline
 .(
-  ;; is this the line we just erased? if so, copy data back
+  ;; is this the line we just erased? if so, copy data back.
+  ;; we keep it there in case it is yanked back afterwards.
   lda CURLINE
   cmp KILLLINE
   bne nocopy
@@ -1277,8 +1276,7 @@ notlast
 
 continue
 
-  ldy #1
-
+  ;; BUG MOVE THIS BACK?
   ;; reset SCREENSTART if necessary
   lda CURLINE
   cmp SCREENSTART
@@ -1287,12 +1285,15 @@ continue
   cmp SCREENSTART+1
   bne skip
 
+  ldy #1
   lda (CURLINE)
   sta SCREENSTART
   lda (CURLINE),y
   sta SCREENSTART+1
   
 skip
+  ;; BUG THIS IS WRONG IF WE DELETED THE LAST LINE
+  ldy #1
   lda (CURLINE)     ; update CURLINE and CURDATA to point to next line
   pha
   lda (CURLINE),y
@@ -2503,7 +2504,7 @@ writeloop
   ;; flush directory entry
   inx
   inx
-  jsr sdsavebuf
+  jsr ROMSDSAVBUF
 
 
   rts
