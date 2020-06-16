@@ -11,39 +11,44 @@
 ;;;
 
 * = $0300
+jmp start
 
-;;; these variables are imported from the monitor/FORTH
+;;; Declarations. These first few are imported from monitor/FORTH.
 PRINTVEC=$0042
 INPUT=$7F00
 SCRATCH=$0010
 CURSEC=$0068
 WORD=$7EC0
 
-;;; these variables, for XMODEM, are the same as monitor/FORTH
-XBLOCKNO    = $0030
-XBLOCKINV   = $0031
-XBLOCKCOUNT = $0032
-XCHKSUM     = $0033
-XDESTADDR   = $0034 ; and $0035
-BUFFER      = $0036 ; and $0037
+;;; These variables, for XMODEM, are the same as monitor/FORTH
+XBLOCKNO    = $0030               ; stores block number
+XBLOCKINV   = $0031               ; stores inverted block number
+XBLOCKCOUNT = $0032               ; stores count (expected block number)
+XCHKSUM     = $0033               ; keeps track of checksum
+XDESTADDR   = $0034 ; and $0035   ; pointer to destination address
+;BUFFER      = $0036 ; and $0037   
 
 XBUFFER     = $4000
-XSENTINEL   = $4200
+XSENTINEL   = $4400 ; buffer is 1KB
 
-  jmp start
-
-CLUSTER  .word 0
-FILEPOSN .word 0
-YBLOCKS  .byte 0
+CLUSTER  .word 0    ; file cluster number
+FILEPOSN .word 0    ; track file position
+YBLOCKS  .byte 0    ; track 128-byte segments of 1K block
 
 #include "../decl.a65"
 #include "../stack.a65"
 #include "jmptable.a65"
 
-DEBUG=$5000
+;; Use the North (system) VIA PORTA as the debug channel
+;DEBUG=$B000
+DEBUG=VIA_PORTA
 
 start
-  stz DEBUG
+  ;; set up the North VIA PORTA as the debug channel
+  lda #255          ; all bits as outputs
+  sta VIA_DDRA
+  lda #$55
+  sta DEBUG
 
   ;; extract the filename from the command line, and copy it into
   ;; WORD as a counted string
@@ -221,7 +226,7 @@ filesetup
   ;; finish
   rts
 
-nameerrstr .byte "Usage: upload filename", $0a, $0d, $00
+nameerrstr .byte "Usage: yupload filename", $0a, $0d, $00
 fileerrstr .byte "Error: file already exists", $0a, $0d, $00
 replacestr .byte "Replace existing file? ", $00
 createmsg  .byte "Creating new file", $0a, $0d, $00
@@ -291,48 +296,70 @@ processbuffer
 stillgoing
   stz YBLOCKS       ; default is 128 byte
   cmp #$01          ; start-of-header for 128 byte transmission
-  beq process128
+  beq begindata
   cmp #$02          ; start-of-header for 1K byte transmission
-  beq process1k
+  beq set1k
   jsr headererror
   lda #$01
   sta DEBUG
   jmp xmerror
 
-process1k
-  lda #7            ; we will loop until this is 0
+set1k
+  lda #7            ; 1024 is 8x128 so we will loop until this is 0
   sta YBLOCKS
+  ;; and then fall through to begindata
 
-process128
-  stz DEBUG
+begindata
+  ;; now process the data blocks, which comprise a block number and
+  ;; then 128 or 1024 bytes of data, followed by a checksum.
+
+  ;stz DEBUG
+  lda #9
+  sta DEBUG
   stz XCHKSUM
 
-  ;; get block number and inverse block number
+  ;; get block number and inverse block number. both are sent to
+  ;; reduce errors, so compare them.
   jsr getserial
   sta XBLOCKNO
+  lda #10
+  sta DEBUG
   jsr getserial
   sta XBLOCKINV
+  lda #11
+  sta DEBUG
   sec
   lda #255
   sbc XBLOCKNO
   cmp XBLOCKINV     ; does block number match inverse block number?
   beq checkblockcount
+  lda #12
+  sta DEBUG
   jsr blockcounterror
   lda #$02
   sta DEBUG
   jmp xmerror
 
 checkblockcount
+  ;; we got the block number successfully. is it what we thought?
+  lda #13
+  sta DEBUG
   inc XBLOCKCOUNT
   lda XBLOCKCOUNT
   cmp XBLOCKNO      ; does it match what we were expecting?
-  beq processdata
+  beq processdata   ; yes, so safe to proceed
   jsr blockcounterror
   lda #$03
   sta DEBUG
   jmp xmerror
 
 processdata
+  ;; now load the data. we work in units of 128 bytes, even when
+  ;; we are actually reading blocks of 1024. YBLOCKS tells us how
+  ;; many units of 128 we need for one full transmitted block.
+  lda #14
+  sta DEBUG
+dataloop
   ldy #0
 nextbyte
   jsr getserial
@@ -340,13 +367,17 @@ nextbyte
   clc
   adc XCHKSUM
   sta XCHKSUM
+  lda #15
+  sta DEBUG
   iny
-  cpy #$80
+  cpy #$80          ; loaded 128?
   bne nextbyte
 endof128
-  ;; first check, are we done or are we still reading a 1K
-  ;; block? if we are, then skip the checksum test
-  lda YBLOCKS
+  lda #16
+  sta DEBUG
+  ;; we might be done or are we still reading a 1K
+  ;; block? if it's 1024, then skip the checksum test
+  lda YBLOCKS       ; YBLOCKS=0 when this block is complete
   bne nochecksum
   jsr getserial
   cmp XCHKSUM
@@ -356,8 +387,10 @@ endof128
   sta DEBUG
   jmp xmerror
 
-nochecksum
 checksumok
+  stz XCHKSUM       ; reset checksum
+
+nochecksum
 
   ;; update the destination address by 128 ($80)
   lda #$80
@@ -387,6 +420,7 @@ checksumok
   lda #$05
   sta DEBUG
 
+  ;; BUG BUG BUG this code is shared with finalize. write it as flushsub.
   ;; set up stack for save
   dex               ; first, the address of the data to save
   dex
@@ -394,12 +428,17 @@ checksumok
   sta 1,x
   lda #>XBUFFER
   sta 2,x
-  dex               ; second, the number of bytes to write
+  dex               ; second, the number of bytes to write (XDESTADDR-XBUFFER)
   dex
-  lda #0
+  sec
+  lda XDESTADDR
+  sbc #<XBUFFER
   sta 1,x
-  lda #$2
+  pha               ; cache it, we'll need it in a minute
+  lda XDESTADDR+1
+  sbc #>XBUFFER
   sta 2,x
+  pha               ; cache it, we'll need it in a minute
   dex               ; third, the cluster where we write data
   dex
   lda CLUSTER
@@ -419,13 +458,17 @@ checksumok
   lda #$06
   sta DEBUG
 
-  ;; then update the file position by 512 bytes
+  ;; then update the file position by size of buffer (which we cached)
+  ply               ; stash MSB in Y for a moment
   clc
-  lda FILEPOSN+1
-  adc #$2
+  pla               ; pull LSB
+  adc FILEPOSN
+  sta FILEPOSN
+  tya               ; load MSB
+  adc FILEPOSN+1
   sta FILEPOSN+1
 
-  ;; reset pointer
+  ;; reset data pointer
   lda #<XBUFFER
   sta XDESTADDR
   lda #>XBUFFER
@@ -438,12 +481,12 @@ proceed
   ;; do we have more data to read for this block? if not, ACK and
   ;; loop for next block.
   lda YBLOCKS
-  bne sendack
+  beq sendack
 
   ;; otherwise, decrement counter and load next 128 bytes
   dec
   sta YBLOCKS
-  jmp processdata
+  jmp dataloop
 
 sendack
   ;; send an ACK and loop for the next block
@@ -468,12 +511,12 @@ endoftransmission
   ;; data. otherwise, process any remaining data.
   lda XDESTADDR
   cmp #<XBUFFER
-  bne finalize
+  bne flushdata
   lda XDESTADDR+1
   cmp #>XBUFFER
   beq finish
 
-finalize
+flushdata
   plx               ; restore the operand stack pointer
 
   ;; there is data still to write out. set up stack for save.
@@ -636,8 +679,8 @@ crlf
   rts
 
 
-startstr:   .byte "xmodem listening", $0d, $0a, $00
-recvdstr:   .byte "xmodem received", $0d, $0a, $00
+startstr:   .byte "x/ymodem listening", $0d, $0a, $00
+recvdstr:   .byte "x/ymodem received", $0d, $0a, $00
 blockerrstr:.byte "block count error", $0a, $0d, $00
 chksmerrstr:.byte "checksum errror", $0a, $0d, $00
 headerrstr: .byte "header error", $0a, $0d, $00
