@@ -244,11 +244,17 @@ filesetup
 
   jsr xmodemrecv    ; this is where the actual data transfer happens
 
-  ;; set file length to current file position
+  ;; set file length to current file position in the case of
+  ;; XMODEM or to the designated file length in the case of
+  ;; YMODEM
   jsr ROMFINDDIRW   ; first, reload directory entry
-;  jsr crlf          ; debugging information
-;  jsr ROMPRTSTCK
-;  jsr crlf
+
+  lda YMODEM        ; test transfer mode
+  bne ymlength      ; branch to YMODEM code
+
+  ;; for XMODEM, we don't know the file size, so we just set it
+  ;; to whatever we've written.
+  ;;
   lda 1,x           ; now update file length. Get pointer into SCRATCH.
   sta SCRATCH
   lda 2,x
@@ -259,7 +265,24 @@ filesetup
   iny
   lda FILEPOSN+1
   sta (SCRATCH),y
+  bra lengthset
 
+ymlength
+  ;; for YMODEM, we know the file size from the zero block
+  ;; start by convering it from a string to an integer
+  jsr convertfilesizesub    ; results in SCRATCH and SCRATCH+1
+  lda 1,x           ; get data pointer from the stack
+  sta SCRATCH+2     ; and put it into SCRATCH+2/3
+  lda 2,x
+  sta SCRATCH+3
+  ldy #28           ; write the file length at PTR+28
+  lda SCRATCH
+  sta (SCRATCH+2),y
+  iny
+  lda SCRATCH+1
+  sta (SCRATCH+2),y
+
+lengthset
   ;; remove pointer from the stack, leaving sector number
   inx
   inx
@@ -593,7 +616,7 @@ finish
   ;; been no new transmission for a period of a second or so. that might
   ;; work better...
   ;;
-  lda #$30
+  lda #$20
 fullloop
   ldy #$0
 busywait
@@ -617,33 +640,13 @@ endxmodem
   ldx OPSTACK       ; restore operand stack pointer in x
 ;  jsr ROMPRTSTCK
 
-  ;; TMP
-  ;; print out file size just to show it worked
-.(
-  jsr crlf
-  ldy #0
-nextchar
-  lda FLENGTH,y
-  beq done
-  jsr ROMPUTA
-  iny
-  cpy #10
-  bne nextchar
-done
-  jsr crlf
-.)
-
-  ;; TMP convert to integer and print in hex
-  jsr convertfilesizesub
-  lda SCRATCH+1
-  jsr putax
-  lda SCRATCH
-  jsr putax
-  jsr crlf
   rts
 
 
-;;; special handling for block 0
+;;; special handling for block 0. block 0 only appears for YMODEM
+;;; transfers and contains file name, file length, and other data.
+;;; this code is called after the block has been received.
+;;;
 gotblock0
   ;; block zero contains the filename, and optionally file length and
   ;; other fields. the only thing we care about is the file length.
@@ -933,8 +936,8 @@ crlf
   rts
 
 
-startstr:   .byte "x/ymodem listening", $0d, $0a, $00
-recvdstr:   .byte "x/ymodem received", $0d, $0a, $00
+startstr:   .byte "ymodem listening", $0d, $0a, $00
+recvdstr:   .byte "ymodem received", $0d, $0a, $00
 blockerrstr:.byte "block count error", $0a, $0d, $00
 chksmerrstr:.byte "checksum errror", $0a, $0d, $00
 headerrstr: .byte "header error", $0a, $0d, $00
