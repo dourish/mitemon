@@ -14,23 +14,19 @@
 ;;; stored. That's easy to fix but my SD routines only support up
 ;;; to 32K anyway.
 ;;;
-;;; Larger internal buffer - done
-;;; 1K block support - done
-;;; Mixed block size support - done
-;;; Zero block support - done
-;;; YMODEM teardown support - done
-;;; File truncation - 
+;;; Paul Dourish, June 2020
+;;;
 ;;;
 
 * = $0300
 jmp start
 
 ;;; Declarations. These first few are imported from monitor/FORTH.
-PRINTVEC=$0042
-INPUT=$7F00
-SCRATCH=$0010
-CURSEC=$0068
-WORD=$7EC0
+PRINTVEC=$0042      ; address for printing strings
+INPUT=$7F00         ; input buffer
+SCRATCH=$0010       ; workpad
+CURSEC=$0068        ; current disk sector
+WORD=$7EC0          ; string for filename lookups
 
 ;;; These variables, for XMODEM, are in the same locations as
 ;;; their equivalents in the monitor/FORTH
@@ -64,27 +60,30 @@ C_ACK=$06
 C_NAK=$15
 C_EOT=$04
 
-#include "../decl.a65"
-#include "../stack.a65"
-#include "jmptable.a65"
-
 ;; Use the North (system) VIA PORTA as the debug channel
 DEBUG=VIA_PORTA
 
 
+#include "../decl.a65"
+#include "../stack.a65"
+#include "jmptable.a65"
+
+
 ;;;
-;;; There are four phases to execution:
+;;; There are five phases to execution:
 ;;;
 ;;; Phase 1- file processing. Extract upload filename from the command
 ;;;   line, determine if it exists, create it if not, and initialize
 ;;;   file variables.
-;;; Phase 2- initiating. Send NACKs until the connection starts up.
+;;; Phase 2- initiating. Send NAKs until the connection starts up.
 ;;; Phase 3- block zero. If a zero block is transmitted, get the data
 ;;;   that we need (which is basically just file length, because we
 ;;;   ignore the filename.
 ;;; Phase 4- data transfer. It does exactly what it says on the tin.
+;;; Phase 5- finalize the file.
 ;;;
-;;; Phase 1 happens under "start". Phases 2-4 happen under "xmodemrecv".
+;;; Phases 1 and 5 happen under "start". Phases 2-4 happen under
+;;; "xmodemrecv".
 ;;;
 
 
@@ -92,12 +91,10 @@ start
   ;; set up the North VIA PORTA as the debug channel
   lda #255          ; all bits as outputs
   sta VIA_DDRA
-  lda #$55
-  sta DEBUG
 
   ;; extract the filename from the command line, and copy it into
   ;; WORD as a counted string
-
+  ;;
   ldy #0
   ;; skip to first space (ie skip past the command)
 skip1
@@ -134,7 +131,7 @@ nextchar
 donecopy
   stx WORD          ; store the character count
   plx
-  bra nextstep
+  bra findfile
 
 nameerror
   ;; there's been some problem finding the name, so
@@ -146,14 +143,14 @@ nameerror
   jsr ROMPRTSTR
   rts
 
-nextstep
+findfile
   ;; look up the filename in the dictionary.
   clc
   jsr ROMFINDDIRW
   bcs newfile
 
   ;; the file exists. check if the user wants to overwrite it.
-
+  ;;
 fileerror
   lda #<replacestr
   sta PRINTVEC
@@ -180,6 +177,7 @@ newfile
   ;; the named file does not exist, so make a new file with that name
   ;; .. which means to put filename as c-string on the stack
   ;; .. then jsr newfilesub
+  ;;
   dex
   dex
   lda #<WORD
@@ -201,7 +199,7 @@ filesetup
   ;; so the cluster number is at ptr + 26,27
   ;; CHECK HAS THE DIRECTORY SECTOR BEEN SAVED YET???
 
-  ; get cluster #, cache it
+  ;; get cluster #, cache it
   lda stackbase+1,x
   sta SCRATCH
   lda stackbase+2,x
@@ -213,21 +211,9 @@ filesetup
   lda (SCRATCH),y
   sta CLUSTER+1
 
-;  lda #"c
-;  jsr ROMPUTA
-;  lda CLUSTER+1
-;  jsr putax
-;  lda CLUSTER
-;  jsr putax
-
-  ; set file position
+  ;; initialize file position
   stz FILEPOSN
   stz FILEPOSN+1
-
-  ;; some debugging information
-;  jsr crlf
-;  jsr ROMPRTSTCK
-;  jsr crlf
 
   ;; set xmodem data pointer to start of buffer
   lda #<XBUFFER
@@ -242,8 +228,13 @@ filesetup
   stz CURSEC+2
   stz CURSEC+3
 
-  jsr xmodemrecv    ; this is where the actual data transfer happens
+  ;; xmodemrev is where the actual data transfer happens. it used
+  ;; to be structured a subroutine but that didn't allow for
+  ;; good error handling.
+  jmp xmodemrecv
 
+success
+  ;; return point after successful data transfer (and file writes).
   ;; set file length to current file position in the case of
   ;; XMODEM or to the designated file length in the case of
   ;; YMODEM
@@ -290,17 +281,8 @@ lengthset
   ;; flush the directory block, removing sector number from stack
   jsr ROMSDSAVBUF
 
-;  jsr ROMPRTSTCK    ; debugging
-;  jsr crlf
-
-  ;; finish
+  ;; finish and return to CLI
   rts
-
-nameerrstr .byte "Usage: yupload filename", $0a, $0d, $00
-fileerrstr .byte "Error: file already exists", $0a, $0d, $00
-replacestr .byte "Replace existing file? ", $00
-createmsg  .byte "Creating new file", $0a, $0d, $00
-
 
 
 ;;; entry point for main xmodem/ymodem code. this is phases 2-4
@@ -321,11 +303,11 @@ xmodemrecv
   stz XBLOCKCOUNT
 
   ;; PHASE 2. wait for transmission to start. the deal here is that
-  ;; we are meant to listen with 10-second timeouts, and sent a NACK
+  ;; we are meant to listen with 10-second timeouts, and sent a NAK
   ;; every ten seconds, one of which will signal to the other end that
   ;; we are ready to go. However, we don't have a timer set up anywhere.
   ;; so I'm going to cheat -- we will basically listen for 256x256 loops,
-  ;; and send a NACK after that. it will actually just be a second or two.
+  ;; and send a NAK after that. it will actually just be a second or two.
 waitstart
   ldy #$0
   ldx #$0
@@ -389,7 +371,6 @@ begindata
   ;; now process the data blocks, which comprise a block number and
   ;; then 128 or 1024 bytes of data, followed by a checksum.
 
-  ;stz DEBUG
   lda #9
   sta DEBUG
   stz XCHKSUM
@@ -469,10 +450,17 @@ endof128
   jsr getserial
   cmp XCHKSUM
   beq checksumok
-  jsr checksumerror
+
+  ;; my SBC is connected via USB so I really shouldn't be getting
+  ;; checksum errors. nonetheless, if I do, the right behavior is
+  ;; to send a NAK and loop back (and perhaps count up in case this
+  ;; happens repeatedly?)
+  lda #C_NAK
+  jsr ROMPUTA
+  stz XCHKSUM
   lda #$04
   sta DEBUG
-  jmp xmerror
+  jmp nextblock
 
 checksumok
   stz XCHKSUM       ; reset checksum
@@ -638,9 +626,7 @@ xmerror
 
 endxmodem
   ldx OPSTACK       ; restore operand stack pointer in x
-;  jsr ROMPRTSTCK
-
-  rts
+  jmp success       ; return to main line code to finalize file
 
 
 ;;; special handling for block 0. block 0 only appears for YMODEM
@@ -754,7 +740,7 @@ flushdatasub
   ;;   ( address count cluster offset -- )
   ;; address is LBLOCK, count is XDESTADDR-XBUFFER, cluster is
   ;; same as ever, and offset is the current count of written-out bytes
-
+  ;;
   dex               ; first, the address parameter
   dex
   lda #<XBUFFER
@@ -872,7 +858,6 @@ checksumerror
   sta PRINTVEC
   lda #>chksmerrstr
   sta PRINTVEC+1
-;  jsr ROMPRTSTR
   rts
 
 headererror
@@ -880,7 +865,6 @@ headererror
   sta PRINTVEC
   lda #>headerrstr
   sta PRINTVEC+1
-;  jsr ROMPRTSTR
   rts
 
 blockcounterror
@@ -888,11 +872,10 @@ blockcounterror
   sta PRINTVEC
   lda #>blockerrstr
   sta PRINTVEC+1
-;  jsr ROMPRTSTR
   rts
 
 
-#if 1
+#if 0
 putax
 .(
   phy
@@ -941,4 +924,8 @@ recvdstr:   .byte "ymodem received", $0d, $0a, $00
 blockerrstr:.byte "block count error", $0a, $0d, $00
 chksmerrstr:.byte "checksum errror", $0a, $0d, $00
 headerrstr: .byte "header error", $0a, $0d, $00
+nameerrstr  .byte "Usage: yupload filename", $0a, $0d, $00
+fileerrstr  .byte "Error: file already exists", $0a, $0d, $00
+replacestr  .byte "Replace existing file? ", $00
+createmsg   .byte "Creating new file", $0a, $0d, $00
 hextable:   .byte "0123456789ABCDEF"
