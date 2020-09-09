@@ -1,0 +1,49 @@
+
+#include "jmptable.a65"
+PRINTVEC=$0042      ; address for printing strings
+
+
+  *=$0300
+  
+  lda #<data
+  sta temp
+  lda #>data
+  sta temp+1
+
+  lda #7
+  sta temp+2
+
+line
+  lda temp
+  sta PRINTVEC
+  lda temp+1
+  sta PRINTVEC+1
+  jsr ROMPRTSTR
+
+  clc
+  lda temp
+  adc #35
+  sta temp
+  bcc skip
+  inc temp+1
+skip
+
+  dec temp+2
+  bne line
+  rts
+
+;;; for retro-value, these are mpapped out in the format of the
+;;; Commodore PET font.
+;;;
+data
+.byte "  666   555555    0000     2222 ", $0d, $0a, $00
+.byte " 6      5        0    0   2    2", $0d, $0a, $00
+.byte "6       5555     0   00        2", $0d, $0a, $00
+.byte "66666       5    0 00 0      22 ", $0d, $0a, $00
+.byte "6    6       5   00   0    222  ", $0d, $0a, $00
+.byte "6    6  5   5    0    0   2     ", $0d, $0a, $00
+.byte " 6666    555      0000    22222 ", $0d, $0a, $00
+
+
+temp .byte 0, 0, 0
+
