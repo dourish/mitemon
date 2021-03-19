@@ -97,11 +97,16 @@ table7
 ;;; on the same port, I'm likely to want to move some of the lines
 ;;; around later. However, for now, I wannt to use validated code.
 ;;;
+;;; Other bits:
+;;;    BACKLIGHT  PB3, ie 8
+;;;    BUSY       PB4, ie 16
+;;;
 
 SPI_CLK  = 1
 SPI_MOSI = 2
 SPI_CS   = 4
 SPI_MISO = 128
+BUSYMASK = 16
 
 ;;; set up data direction for SPI_PORT -- lower four bits are outputs
 ;;; and upper four bits are inputs. This is called from FORTH startup.
@@ -450,6 +455,13 @@ recv7bits           ; used to be a loop, unrolled for speed
   rts               ; return with data in A
 
 
+awaitfree
+  pha
+  lda SPI_PORT
+  and BUSY_MASK
+  bne awaitfree
+  pla
+  rts
 
 
 ;;;
