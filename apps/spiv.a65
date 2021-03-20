@@ -27,6 +27,23 @@ UVIA_DDRA  = $8013
 
 SPI_PORT   = UVIA_PORTB
 
+
+;; colors
+C_BLACK=$0000
+C_BLUE=$001F 
+C_RED=$F800  
+C_GREEN=$07E0
+C_CYAN=$07FF 
+C_MAGENTA=$F81F
+C_YELLOW=$FFE0 
+C_WHITE=$FFFF  
+
+;; Command/Data pins for SPI
+DATAWRITE=$00
+DATAREAD=$40 
+CMDWRITE=$80 
+CMDREAD =$C0  
+
 ;;;
 ;;; Include standard startup code
 ;;;
@@ -458,8 +475,59 @@ recv7bits           ; used to be a loop, unrolled for speed
 awaitfree
   pha
   lda SPI_PORT
-  and BUSY_MASK
+  and BUSYMASK
   bne awaitfree
+  pla
+  rts
+
+wrcommand
+  pha
+  ;; set CS low
+  lda #SPI_CS
+  trb SPI_PORT
+
+  ;; send CMDWRITE
+  lda CMDWRITE
+  jsr sendbyte
+  pla
+  ;; send A
+  jsr sendbyte
+  ;; set CS high
+  lda #SPI_CS
+  tsb SPI_PORT
+  rts
+
+
+rdcommand
+
+wrdata
+  pha
+  ;; set CS low
+  lda #SPI_CS
+  trb SPI_PORT
+  ;; send DATAWRITE
+  lda DATAWRITE
+  jsr sendbyte
+  pla
+  ;; send A
+  jsr sendbyte
+  ;; set CS high
+  lda #SPI_CS
+  tsb SPI_PORT
+  rts
+
+rddata
+  ;; set CS low
+  lda #SPI_CS
+  trb SPI_PORT
+  ;; send DATAREAD
+  lda DATAREAD
+  ;; receive data into A
+  jsr recv8bits
+  pha
+  ;; set CS high
+  lda #SPI_CS
+  tsb SPI_PORT
   pla
   rts
 
@@ -701,6 +769,11 @@ doinit
   rts
 
 dotext
+  ;; wait until free
+  ;; send command 0x40 (MWCR0 register)
+  ;; read response
+  ;; set bit 7
+  ;; write it back as data
   rts
 
 dograph
@@ -714,6 +787,8 @@ dosquares
 
 docolors
   rts
+
+
 
 
 
