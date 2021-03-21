@@ -12,6 +12,7 @@
 ;;;
 ;;;
 
+* = $0300
 
 SCRATCH    = $0010  ; through to $001F
 ARGINDEX   = $0020  ; and on to $002F for up to 16 arguments
@@ -38,7 +39,7 @@ C_MAGENTA=$F81F
 C_YELLOW=$FFE0 
 C_WHITE=$FFFF  
 
-;; Command/Data pins for SPI
+;; Command/Data codes for SPI
 DATAWRITE=$00
 DATAREAD=$40 
 CMDWRITE=$80 
@@ -50,7 +51,12 @@ CMDREAD =$C0
 
 #include "../decl.a65"
 
+;;; also include all the RA8875-specific definitions
+#include "spivdefs.a65"
+
 jmp start
+
+#include "delay.a65"
 
 ;;;
 ;;; Dispatch table for CLI
@@ -88,6 +94,10 @@ table6
   .byte "quit", $00
   .word doquit
 table7
+  .word table8
+  .byte "light", $00
+  .word dolight
+table8
   .word $0000            ; signals last entry in the table
   .byte "colors", $00
   .word docolors
@@ -117,13 +127,16 @@ table7
 ;;; Other bits:
 ;;;    BACKLIGHT  PB3, ie 8
 ;;;    BUSY       PB4, ie 16
+;;;    RESET      PB5, ie 32
 ;;;
 
 SPI_CLK  = 1
 SPI_MOSI = 2
 SPI_CS   = 4
+LIGHT    = 8
 SPI_MISO = 128
 BUSYMASK = 16
+RESET    = 32
 
 ;;; set up data direction for SPI_PORT -- lower four bits are outputs
 ;;; and upper four bits are inputs. This is called from FORTH startup.
@@ -475,7 +488,7 @@ recv7bits           ; used to be a loop, unrolled for speed
 awaitfree
   pha
   lda SPI_PORT
-  and BUSYMASK
+  and #BUSYMASK
   bne awaitfree
   pla
   rts
@@ -487,7 +500,7 @@ wrcommand
   trb SPI_PORT
 
   ;; send CMDWRITE
-  lda CMDWRITE
+  lda #CMDWRITE
   jsr sendbyte
   pla
   ;; send A
@@ -497,8 +510,20 @@ wrcommand
   tsb SPI_PORT
   rts
 
-
 rdcommand
+  ;; set CS low
+  lda #SPI_CS
+  trb SPI_PORT
+  ;; send DATAREAD
+  lda #CMDREAD
+  ;; receive data into A
+  jsr recv8bits
+  pha
+  ;; set CS high
+  lda #SPI_CS
+  tsb SPI_PORT
+  pla
+  rts
 
 wrdata
   pha
@@ -506,7 +531,7 @@ wrdata
   lda #SPI_CS
   trb SPI_PORT
   ;; send DATAWRITE
-  lda DATAWRITE
+  lda #DATAWRITE
   jsr sendbyte
   pla
   ;; send A
@@ -521,7 +546,7 @@ rddata
   lda #SPI_CS
   trb SPI_PORT
   ;; send DATAREAD
-  lda DATAREAD
+  lda #DATAREAD
   ;; receive data into A
   jsr recv8bits
   pha
@@ -529,6 +554,26 @@ rddata
   lda #SPI_CS
   tsb SPI_PORT
   pla
+  rts
+
+;; write value in Y to register in A
+writereg
+  jsr wrcommand
+  tya
+  jsr wrdata
+  rts
+  
+
+
+vidinit
+  ;; hold reset low
+  lda #SPI_CS
+  trb SPI_PORT
+  ;; short pause
+  jsr delay100us    ; TO DO is that long enough?
+  ;; set reset high
+  lda #SPI_CS
+  tsb SPI_PORT
   rts
 
 
@@ -770,10 +815,16 @@ doinit
 
 dotext
   ;; wait until free
+  jsr awaitfree
   ;; send command 0x40 (MWCR0 register)
+  lda #$40
+  jsr wrcommand
   ;; read response
+  jsr rddata
   ;; set bit 7
+  ora #$80
   ;; write it back as data
+  jsr wrdata
   rts
 
 dograph
@@ -786,6 +837,21 @@ dosquares
   rts
 
 docolors
+  rts
+
+light .byte 0
+
+dolight
+  lda light
+  bne lightoff
+  inc light
+  lda #LIGHT
+  tsb SPI_PORT
+  rts
+lightoff
+  dec light
+  lda #LIGHT
+  trb SPI_PORT
   rts
 
 

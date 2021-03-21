@@ -1,0 +1,201 @@
+;;; bloody hell there are a lot of registers in this thing
+
+PWRR = $01            
+PWRR_DISPON = $80     
+PWRR_DISPOFF = $00    
+PWRR_SLEEP = $02      
+PWRR_NORMAL = $00     
+PWRR_SOFTRESET = $01  
+
+MRWC = $02  
+
+GPIOX = $C7  
+
+PLLC1 = $88          
+PLLC1_PLLDIV2 = $80  
+PLLC1_PLLDIV1 = $00  
+
+PLLC2 = $89         
+PLLC2_DIV1 = $00    
+PLLC2_DIV2 = $01    
+PLLC2_DIV4 = $02    
+PLLC2_DIV8 = $03    
+PLLC2_DIV16 = $04   
+PLLC2_DIV32 = $05   
+PLLC2_DIV64 = $06   
+PLLC2_DIV128 = $07  
+
+SYSR = $10        
+SYSR_8BPP = $00   
+SYSR_16BPP = $0C  
+SYSR_MCU8 = $00   
+SYSR_MCU16 = $03  
+
+PCSR = $04        
+PCSR_PDATR = $00  
+PCSR_PDATL = $80  
+PCSR_CLK = $00    
+PCSR_2CLK = $01   
+PCSR_4CLK = $02   
+PCSR_8CLK = $03   
+
+HDWR = $14  
+
+HNDFTR = $15          
+HNDFTR_DE_HIGH = $00  
+HNDFTR_DE_LOW = $80   
+
+HNDR = $16       
+HSTR = $17       
+HPWR = $18       
+HPWR_LOW = $00   
+HPWR_HIGH = $80  
+
+VDHR0 = $19      
+VDHR1 = $1A      
+VNDR0 = $1B      
+VNDR1 = $1C      
+VSTR0 = $1D      
+VSTR1 = $1E      
+VPWR = $1F       
+VPWR_LOW = $00   
+VPWR_HIGH = $80  
+
+HSAW0 = $30  
+HSAW1 = $31  
+VSAW0 = $32  
+VSAW1 = $33  
+
+HEAW0 = $34  
+HEAW1 = $35  
+VEAW0 = $36  
+VEAW1 = $37  
+
+MCLR = $8E             
+MCLR_START = $80       
+MCLR_STOP = $00        
+MCLR_READSTATUS = $80  
+MCLR_FULL = $00        
+MCLR_ACTIVE = $40      
+
+DCR = $90                    
+DCR_LINESQUTRI_START = $80   
+DCR_LINESQUTRI_STOP = $00    
+DCR_LINESQUTRI_STATUS = $80  
+DCR_CIRCLE_START = $40       
+DCR_CIRCLE_STATUS = $40      
+DCR_CIRCLE_STOP = $00        
+DCR_FILL = $20               
+DCR_NOFILL = $00             
+DCR_DRAWLINE = $00           
+DCR_DRAWTRIANGLE = $01       
+DCR_DRAWSQUARE = $10         
+
+ELLIPSE = $A0         
+ELLIPSE_STATUS = $80  
+
+MWCR0 = $40          
+MWCR0_GFXMODE = $00  
+MWCR0_TXTMODE = $80  
+MWCR0_CURSOR = $40   
+MWCR0_BLINK = $20    
+
+MWCR0_DIRMASK = $0C
+MWCR0_LRTD = $00
+MWCR0_RLTD = $04
+MWCR0_TDLR = $08
+MWCR0_DTLR = $0C
+
+BTCR = $44   
+CURH0 = $46  
+CURH1 = $47  
+CURV0 = $48  
+CURV1 = $49  
+
+P1CR = $8A          
+P1CR_ENABLE = $80   
+P1CR_DISABLE = $00  
+P1CR_CLKOUT = $10   
+P1CR_PWMOUT = $00   
+
+P1DCR = $8B  
+
+P2CR = $8C          
+P2CR_ENABLE = $80   
+P2CR_DISABLE = $00  
+P2CR_CLKOUT = $10   
+P2CR_PWMOUT = $00   
+
+P2DCR = $8D  
+
+PWM_CLK_DIV1 = $00      
+PWM_CLK_DIV2 = $01      
+PWM_CLK_DIV4 = $02      
+PWM_CLK_DIV8 = $03      
+PWM_CLK_DIV16 = $04     
+PWM_CLK_DIV32 = $05     
+PWM_CLK_DIV64 = $06     
+PWM_CLK_DIV128 = $07    
+PWM_CLK_DIV256 = $08    
+PWM_CLK_DIV512 = $09    
+PWM_CLK_DIV1024 = $0A   
+PWM_CLK_DIV2048 = $0B   
+PWM_CLK_DIV4096 = $0C   
+PWM_CLK_DIV8192 = $0D   
+PWM_CLK_DIV16384 = $0E  
+PWM_CLK_DIV32768 = $0F  
+
+TPCR0 = $70                
+TPCR0_ENABLE = $80         
+TPCR0_DISABLE = $00        
+TPCR0_WAIT_512CLK = $00    
+TPCR0_WAIT_1024CLK = $10   
+TPCR0_WAIT_2048CLK = $20   
+TPCR0_WAIT_4096CLK = $30   
+TPCR0_WAIT_8192CLK = $40   
+TPCR0_WAIT_16384CLK = $50  
+TPCR0_WAIT_32768CLK = $60  
+TPCR0_WAIT_65536CLK = $70  
+TPCR0_WAKEENABLE = $08     
+TPCR0_WAKEDISABLE = $00    
+TPCR0_ADCCLK_DIV1 = $00    
+TPCR0_ADCCLK_DIV2 = $01    
+TPCR0_ADCCLK_DIV4 = $02    
+TPCR0_ADCCLK_DIV8 = $03    
+TPCR0_ADCCLK_DIV16 = $04   
+TPCR0_ADCCLK_DIV32 = $05   
+TPCR0_ADCCLK_DIV64 = $06   
+TPCR0_ADCCLK_DIV128 = $07  
+
+TPCR1 = $71             
+TPCR1_AUTO = $00        
+TPCR1_MANUAL = $40      
+TPCR1_VREFINT = $00     
+TPCR1_VREFEXT = $20     
+TPCR1_DEBOUNCE = $04    
+TPCR1_NODEBOUNCE = $00  
+TPCR1_IDLE = $00        
+TPCR1_WAIT = $01        
+TPCR1_LATCHX = $02      
+TPCR1_LATCHY = $03      
+
+TPXH = $72   
+TPYH = $73   
+TPXYL = $74  
+
+INTC1 = $F0      
+INTC1_KEY = $10  
+INTC1_DMA = $08  
+INTC1_TP = $04   
+INTC1_BTE = $02  
+
+INTC2 = $F1      
+INTC2_KEY = $10  
+INTC2_DMA = $08  
+INTC2_TP = $04   
+INTC2_BTE = $02  
+
+SCROLL_BOTH = $00    
+SCROLL_LAYER1 = $40  
+SCROLL_LAYER2 = $80  
+SCROLL_BUFFER = $C0  
