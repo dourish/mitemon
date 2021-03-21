@@ -576,6 +576,133 @@ vidinit
   tsb SPI_PORT
   rts
 
+reginit
+  ;; TO DO need to do PLL??????
+
+  jsr awaitfree
+  lda #PCSR
+  ldy #PCSR_PDATL|PCSR_2CLK
+  jsr writereg
+
+  jsr awaitfree
+  lda #HDWR
+  ldy #99
+  jsr writereg
+
+  jsr awaitfree
+  lda #HNDFTR
+  ldy #HNDFTR_DE_HIGH
+  jsr writereg
+
+  jsr awaitfree
+  lda #HNDR
+  ldy #24
+  jsr writereg
+
+  jsr awaitfree
+  lda #HSTR
+  ldy #3
+  jsr writereg
+
+  jsr awaitfree
+  lda #HPWR
+  ldy #HPWR_LOW+11
+  jsr writereg
+
+  ;; vertical settings registers
+  jsr awaitfree
+  lda #VDHR0
+  ldy #<479
+  jsr writereg
+
+  jsr awaitfree
+  lda #VDHR1
+  ldy #>479
+  jsr writereg
+
+  jsr awaitfree
+  lda #VNDR0
+  ldy #32
+  jsr writereg
+
+
+  jsr awaitfree
+  lda #VNDR1
+  ldy #0
+  jsr writereg
+
+  jsr awaitfree
+  lda #VSTR0
+  ldy #32
+  jsr writereg
+
+  jsr awaitfree
+  lda #VSTR1
+  ldy #0
+  jsr writereg
+
+  jsr awaitfree
+  lda #VPWR
+  ldy #VPWR_LOW+1
+  jsr writereg
+
+
+  ;; active window X
+
+  /* Set active window X */
+  jsr awaitfree
+  lda #HSAW0
+  ldy #0
+  jsr writereg
+
+  jsr awaitfree
+  lda #HSAW1
+  ldy #0
+  jsr writereg
+
+  jsr awaitfree
+  lda #HEAW0
+  ldy #<799
+  jsr writereg
+
+  jsr awaitfree
+  lda #HEAW1
+  ldy #>799
+  jsr writereg
+
+  ;; active window Y
+  jsr awaitfree
+  lda #VSAW0
+  ldy #0
+  jsr writereg
+
+  jsr awaitfree
+  lda #VSAW1
+  ldy #0
+  jsr writereg
+
+  jsr awaitfree
+  lda #VEAW0
+  ldy #<799
+  jsr writereg
+
+  jsr awaitfree
+  lda #VEAW1
+  ldy #>799
+  jsr writereg
+
+  jsr awaitfree
+  lda #MCLR
+  ldy #MCLR_START|MCLR_FULL
+  jsr writereg
+
+  jsr delay1s
+
+
+  rts
+
+
+
 
 ;;;
 ;;;
