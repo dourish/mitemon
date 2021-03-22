@@ -98,6 +98,10 @@ table7
   .byte "light", $00
   .word dolight
 table8
+  .word table9
+  .byte "cursor", $00
+  .word docursor
+table9
   .word $0000            ; signals last entry in the table
   .byte "colors", $00
   .word docolors
@@ -574,19 +578,33 @@ vidinit
   lda #SPI_CS
   trb SPI_PORT
   ;; short pause
-  jsr delay100us    ; TO DO is that long enough?
+  jsr delay1s
   ;; set reset high
   lda #SPI_CS
   tsb SPI_PORT
   rts
 
 reginit
-  ;; TO DO need to do PLL??????
+
+  lda #PLLC1
+  ldy #PLLC1_PLLDIV1+11
+  jsr writereg
+  jsr delay1ms
+
+  lda #PLLC2
+  ldy #PLLC2_DIV4
+  jsr writereg
+  jsr delay1ms
+
+  lda #SYSR
+  ldy #SYSR_16BPP|SYSR_MCU8
+  jsr writereg
 
   jsr awaitfree
   lda #PCSR
   ldy #PCSR_PDATL|PCSR_2CLK
   jsr writereg
+  jsr delay1ms
 
   jsr awaitfree
   lda #HDWR
@@ -1016,6 +1034,26 @@ dotext
   rts
 
 textstr .byte "text mode set", $10, $13, $00
+
+docursor
+  lda #MWCR0
+  jsr wrcommand
+  jsr rddata
+  ora MWCR0_CURSOR
+  jsr wrdata
+
+  lda #MWCR0
+  jsr wrcommand
+  jsr rddata
+  ora MWCR0_BLINK
+  jsr wrdata
+
+  lda #BTCR
+  jsr wrcommand
+  lda #128
+  jsr wrdata
+  rts
+
 
 dograph
   rts
