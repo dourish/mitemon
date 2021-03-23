@@ -3,6 +3,17 @@
 ;;; the command line code from the monitor and the SPI code from FORTH
 ;;; moved to use the user VIA port and jammed together awkwardly.
 ;;;
+;;; Pinout from the 6522 (PORTB) to the RA8875 board is as follows:
+;;; D0  CLK
+;;; D1  MOSI
+;;; D2  CS
+;;; D3  LIGHT
+;;; D4  BUSY
+;;; D5  RESET
+;;; D6  NC
+;;; D7  MISO
+;;;
+
 
 ;;;
 ;;;
@@ -67,7 +78,7 @@ jmp start
 ;;;
 table
   .word table1
-  .byte "init, $00
+  .byte "init", $00
   .word doinit
 table1
   .word table2
@@ -99,9 +110,13 @@ table7
   .word dolight
 table8
   .word table9
+  .byte "hello", $00
+  .word dohello
+table9
+  .word table10
   .byte "cursor", $00
   .word docursor
-table9
+table10
   .word $0000            ; signals last entry in the table
   .byte "colors", $00
   .word docolors
@@ -489,11 +504,13 @@ recv7bits           ; used to be a loop, unrolled for speed
   rts               ; return with data in A
 
 
+;;; poll the WAIT flag until it goes high
 awaitfree
   pha
+waitloop
   lda SPI_PORT
   and #BUSYMASK
-  bne awaitfree
+  beq waitloop
   pla
   rts
 
@@ -575,17 +592,16 @@ writereg
 
 vidinit
   ;; hold reset low
-  lda #SPI_CS
+  lda #RESET
   trb SPI_PORT
   ;; short pause
   jsr delay1s
   ;; set reset high
-  lda #SPI_CS
+  lda #RESET
   tsb SPI_PORT
   rts
 
 reginit
-
   lda #PLLC1
   ldy #PLLC1_PLLDIV1+11
   jsr writereg
@@ -600,70 +616,70 @@ reginit
   ldy #SYSR_16BPP|SYSR_MCU8
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #PCSR
   ldy #PCSR_PDATL|PCSR_2CLK
   jsr writereg
   jsr delay1ms
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #HDWR
   ldy #99
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #HNDFTR
   ldy #HNDFTR_DE_HIGH
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #HNDR
   ldy #24
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #HSTR
   ldy #3
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #HPWR
   ldy #HPWR_LOW+11
   jsr writereg
 
   ;; vertical settings registers
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VDHR0
   ldy #<479
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VDHR1
   ldy #>479
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VNDR0
   ldy #32
   jsr writereg
 
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VNDR1
   ldy #0
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VSTR0
   ldy #32
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VSTR1
   ldy #0
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VPWR
   ldy #VPWR_LOW+1
   jsr writereg
@@ -671,49 +687,48 @@ reginit
 
   ;; active window X
 
-  /* Set active window X */
-  jsr awaitfree
+  ;jsr awaitfree
   lda #HSAW0
   ldy #0
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #HSAW1
   ldy #0
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #HEAW0
   ldy #<799
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #HEAW1
   ldy #>799
   jsr writereg
 
   ;; active window Y
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VSAW0
   ldy #0
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VSAW1
   ldy #0
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VEAW0
   ldy #<799
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #VEAW1
   ldy #>799
   jsr writereg
 
-  jsr awaitfree
+  ;jsr awaitfree
   lda #MCLR
   ldy #MCLR_START|MCLR_FULL
   jsr writereg
@@ -1010,7 +1025,7 @@ doinit
   jsr printvecstr
   rts
 
-initstr .byte "RA8875 initialized", $10, $13, $00
+initstr .byte "RA8875 initialized", $0a, $0d, $00
 
 dotext
   ;; wait until free
@@ -1033,7 +1048,7 @@ dotext
   jsr printvecstr
   rts
 
-textstr .byte "text mode set", $10, $13, $00
+textstr .byte "text mode set", 10, 13, $00
 
 docursor
   lda #MWCR0
@@ -1052,7 +1067,15 @@ docursor
   jsr wrcommand
   lda #128
   jsr wrdata
+
+  lda #<curstr
+  sta PRINTVEC
+  lda #>curstr
+  sta PRINTVEC+1
+  jsr printvecstr
   rts
+
+curstr .byte "cursor on", 10, 13, 0
 
 
 dograph
@@ -1079,7 +1102,7 @@ endstr
 .)
 
 hellostr .byte "Hello hello hello hello hello", $00
-hdonestr .byte "written", $10, $13, $0
+hdonestr .byte "written", 10, 13, $0
 
 dosquares
   rts
@@ -1259,5 +1282,5 @@ endstr
 hextable:	 .byte "0123456789ABCDEF"
 greeting:	 .byte "SPI Video test", $0d, $0a, $00
 prompt:		 .byte "-"
-helpstring:	 .byte "Commands available: init, text, graph, echo, squares, colors, quit", $0d, $0a, $00
+helpstring:	 .byte "Commands available: init, help, text, graph, echo, squares, light, cursor, colors, hello, quit", $0d, $0a, $00
 nocmderrstr:	 .byte "Command not recognized", $0d, $0a, $00
