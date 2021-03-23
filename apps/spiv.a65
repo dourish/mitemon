@@ -738,6 +738,30 @@ reginit
 
   rts
 
+displayon
+
+  ;tft.displayOn(true);
+  lda #PWRR
+  ldy #PWRR_NORMAL|PWRR_DISPON
+  jsr writereg
+  
+  ; tft.GPIOX(true);      // Enable TFT - display enable tied to GPIOX
+  lda #GPIOX
+  ldy #1
+  jsr writereg
+
+  ; tft.PWM1config(true, RA8875_PWM_CLK_DIV1024); // PWM output for backlight
+  lda #P1CR
+  ldy #P1CR_ENABLE|PWM_CLK_DIV1024
+  jsr writereg
+  
+  ;tft.PWM1out(255);
+  lda #P1DCR
+  ldy #255
+  jsr writereg
+
+  rts
+
 
 setcolors
 
@@ -1018,15 +1042,33 @@ doquit
 
 doinit
   jsr vidinit
-  jsr reginit
-  lda #<initstr
+
+  lda #<initstr1
   sta PRINTVEC
-  lda #>initstr
+  lda #>initstr1
   sta PRINTVEC+1
   jsr printvecstr
-  rts
 
-initstr .byte "RA8875 initialized", $0a, $0d, $00
+  jsr reginit
+
+  lda #<initstr2
+  sta PRINTVEC
+  lda #>initstr2
+  sta PRINTVEC+1
+  jsr printvecstr
+
+  jsr displayon
+  
+  lda #<initstr3
+  sta PRINTVEC
+  lda #>initstr3
+  sta PRINTVEC+1
+  jsr printvecstr
+rts
+
+initstr1 .byte "RA8875 reset", $0a, $0d, $00
+initstr2 .byte "registers set", $0a, $0d, $00
+initstr3 .byte "display enabled", $0a, $0d, $00
 
 dotext
   ;; wait until free
