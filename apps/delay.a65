@@ -1,0 +1,186 @@
+
+
+;;; Calibrated delay loops. I need to make sure that I insert some
+;;; timing delays into the control code for the TMS9918A, so here are
+;;; some calibrated loops for different time spans.
+;;;
+;;; I'm running at 4 MHz, so each cycle is 0.25us. The tight loop is 5
+;;; cycles, with 5 up front and 4 at the end (and minus 1 for the
+;;; branch not taken). I have separate loops here so that I don't need
+;;; a parameter or to mess with any registers.
+;;;
+;;; Note that the JSR and RTS together add 12 cycles, which is 3 us,
+;;; so these are tuned to come in slightly under.
+;;;
+;;; the basic loop is:
+;;; PHX
+;;; LDX #delay
+;;; DEX
+;;; BNE loop
+;;; PLX
+
+;;; 200us delay
+;;; 5 + 156*5 + 4 -1 = 788 cycles = 197 us (200 with JSR/RTS)
+delay200us
+  PHX
+  LDX #156
+.(
+loop
+  DEX
+  BNE loop
+.)
+  PLX
+  RTS
+
+;;; 150us delay
+;;; 5 + 116*5 + 4 -1 = 588 cycles = 147us (200 with JSR/RTS)
+delay150us
+  PHX
+  LDX #116
+.(
+loop
+  DEX
+  BNE loop
+.)
+  PLX
+  RTS
+
+;;; 100us delay
+;;; 5 + 77*5 + 4 -1 = 393 cycles = 98.25 us (101.25 with JSR/RTS)
+delay100us
+  PHX
+  LDX #77
+.(
+loop
+  DEX
+  BNE loop
+.)
+  PLX
+  RTS
+
+;;; 5 + 36*5 + 4 -1 = 188 cycles = 47 us (50 with JSR/RTS)
+delay50us
+  PHX
+  LDX #36
+.(
+loop
+  DEX
+  BNE loop
+.)
+  PLX
+  RTS
+
+
+;;; doing the math for a few others:
+;;; 40 = 160 cycles = 5 + 28*5 + 4 - 1 + 12
+;;; 30 = 120 cycles = 5 + 20*5 + 4 - 1 + 12
+;;; 25 = 100 cycles = 5 + 16*5 + 4 - 1 + 12
+;;; 20 = 80 cycles == 5 + 12*5 + 4 - 1 + 12
+
+delay40us
+  PHX
+  LDX #28
+.(
+loop
+  DEX
+  BNE loop
+.)
+  PLX
+  RTS
+
+delay30us
+  PHX
+  LDX #20
+.(
+loop
+  DEX
+  BNE loop
+.)
+  PLX
+  RTS
+
+delay25us
+  PHX
+  LDX #16
+.(
+loop
+  DEX
+  BNE loop
+.)
+  PLX
+  RTS
+
+delay20us
+  PHX
+  LDX #12
+.(
+loop
+  DEX
+  BNE loop
+.)
+  PLX
+  RTS
+
+
+
+
+;;; 5 + 4*5 + 4 - 1 = 28 cycles = 7 us (10 with JSR/RTS)
+delay10us
+  PHX
+  LDX #4
+.(
+loop
+  DEX
+  BNE loop
+.)
+  PLX
+  RTS
+
+;; 5us = 20 cycles. JSR/RTS is 12 cycles, so 4 NOPs takes us up to 20.
+delay5us
+  nop
+  nop
+  nop
+  nop
+  rts
+
+
+;;; delay 1ms, which is 4000 cycles. this one is much more approximate
+;;; than the others for now
+delay1ms
+  jsr delay200us
+  jsr delay200us
+  jsr delay200us
+  jsr delay200us
+  jsr delay200us
+  rts
+  
+;;; delay 1 second. This should come to exactly 4000000 cycles, including
+;;; JSR/RTS.
+delay1s
+  lda #49
+  sta SCRATCH
+loop2
+  lda #100
+  sta SCRATCH+1
+loop1
+  jsr delay200us
+  dec SCRATCH+1
+  bne loop1
+  dec SCRATCH
+  bne loop2
+
+  lda #49
+  sta SCRATCH+1
+loop3
+  jsr delay200us
+  dec SCRATCH+1
+  bne loop3
+  beq next          ; 3 cycles
+next
+  jsr delay50us
+  jsr delay50us
+  jsr delay50us
+  nop
+  nop
+  rts
