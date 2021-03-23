@@ -1071,17 +1071,31 @@ initstr2 .byte "registers set", $0a, $0d, $00
 initstr3 .byte "display enabled", $0a, $0d, $00
 
 dotext
+  lda #"1
+  jsr puta
+
   ;; wait until free
   jsr awaitfree
+
+  lda #"2
+  jsr puta
+
   ;; send command 0x40 (MWCR0 register)
   lda #$40
   jsr wrcommand
+
+  lda #"3
+  jsr puta
+
   ;; read response
   jsr rddata
   ;; set bit 7
   ora #$80
   ;; write it back as data
   jsr wrdata
+
+  lda #"4
+  jsr puta
 
   ;; font selection
   lda #$21
@@ -1090,7 +1104,11 @@ dotext
   and #%0101111     ; clear bits 7 and 5
   jsr wrdata
 
+  lda #"5
+  jsr puta
+
   jsr setcolors
+
   lda #<textstr
   sta PRINTVEC
   lda #>textstr
