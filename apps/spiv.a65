@@ -117,6 +117,10 @@ table9
   .byte "cursor", $00
   .word docursor
 table10
+  .word table11
+  .byte "rw", 0
+  .word dorw
+table11
   .word $0000            ; signals last entry in the table
   .byte "colors", $00
   .word docolors
@@ -515,19 +519,16 @@ waitloop
   rts
 
 wrcommand
-  pha
-  ;; set CS low
-  lda #SPI_CS
+  pha               ; cache value
+  lda #SPI_CS       ; set CS to low
   trb SPI_PORT
 
-  ;; send CMDWRITE
-  lda #CMDWRITE
+  lda #CMDWRITE     ; send CMDWRITE
   jsr sendbyte
-  pla
-  ;; send A
-  jsr sendbyte
-  ;; set CS high
-  lda #SPI_CS
+  pla               ; retreive value
+  jsr sendbyte      ; send it
+
+  lda #SPI_CS       ; set CS high
   tsb SPI_PORT
   rts
 
@@ -1040,6 +1041,13 @@ dotext
   ;; write it back as data
   jsr wrdata
 
+  ;; font selection
+  lda #$21
+  jsr wrcommand
+  jsr rddata
+  and #%0101111     ; clear bits 7 and 5
+  jsr wrdata
+
   jsr setcolors
   lda #<textstr
   sta PRINTVEC
@@ -1049,6 +1057,13 @@ dotext
   rts
 
 textstr .byte "text mode set", 10, 13, $00
+
+dorw
+  lda #MWCR0
+  jsr wrcommand
+  jsr rddata
+  jsr putax
+  rts
 
 docursor
   lda #MWCR0
@@ -1282,5 +1297,5 @@ endstr
 hextable:	 .byte "0123456789ABCDEF"
 greeting:	 .byte "SPI Video test", $0d, $0a, $00
 prompt:		 .byte "-"
-helpstring:	 .byte "Commands available: init, help, text, graph, echo, squares, light, cursor, colors, hello, quit", $0d, $0a, $00
+helpstring:	 .byte "Commands available: help, init, text, rw, graph, echo, squares, light, cursor, colors, hello, quit", $0d, $0a, $00
 nocmderrstr:	 .byte "Command not recognized", $0d, $0a, $00
