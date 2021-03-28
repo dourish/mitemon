@@ -1,0 +1,302 @@
+UVIA_PORTB = $8010
+UVIA_PORTA = $8011
+UVIA_DDRB  = $8012
+UVIA_DDRA  = $8013
+
+SPI_PORT   = UVIA_PORTB
+
+SCRATCH=$0010
+
+#include "../decl.a65"
+
+* = $0300
+
+start
+  jsr setup6522
+loop
+  jsr getchar
+  sta SCRATCH
+  jsr putax
+  lda SCRATCH
+  jsr oldsendbyte
+  lda SCRATCH
+  jsr newsendbyte
+  lda SCRATCH
+  jsr fastsendbyte
+  jsr crlf
+  bra loop
+  
+
+SPI_CLK  = 1
+SPI_MOSI = 2
+SPI_CS   = 4
+LIGHT    = 8
+SPI_MISO = 128
+BUSYMASK = 16
+RESET    = 32
+
+;;; set up data direction for SPI_PORT -- bits 0, 1, 2, 3, and 5 are
+;;; outputs and bits 4, 6 (NC), and 7 are inputs.
+setup6522
+  lda #$2f
+  sta UVIA_DDRB
+  lda #%00100100    ; default values for each bit
+  sta SPI_PORT
+  rts
+
+
+getchar
+.(
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  rts
+
+
+
+;;; this seems to presume that the CLK is at zero by default. I'm
+;;; I am not sure whether that is actually true, which could cause some
+;;; problems -- but more to the point, I don't think that it /should/
+;;; be true. Timing diagrams suggest that CLK should idle high, then
+;;; be set low before clocking begins (with data read on the rising
+;;; clock edge.
+;;;
+oldsendbyte
+  phy
+  ldy #8
+sendloop
+  asl               ; 2 cycles
+  pha               ; 4 cycles
+  bcc sendzero      ; 2/3 cycles
+sendone
+  lda #SPI_MOSI     ; 2 cycles
+  tsb SPI_PORT      ; 6 cycles
+  bra send          ; 3 cycles
+sendzero
+  lda #SPI_MOSI     ; 2 cycles
+  trb SPI_PORT      ; 6 cycles
+send
+  inc SPI_PORT      ; 6 cycles
+  dec SPI_PORT      ; 6 cycles
+  pla               ; 4 cycles
+  dey               ; 2 cycles
+  bne sendloop      ; 3 cycles
+  ply
+  rts
+
+
+
+;;; A faster way to send a byte via SPI. Basically, we don't use
+;;; TSB/TRB and we don't branch depending on 1 or 0; we just rotate the
+;;; bit we want into the relevant position. Revised to assume that
+;;; CLK rests high.
+;;;
+newsendbyte
+  phx
+  phy
+  ldy #8
+
+  tax               ; x will store the data as we transmit it
+
+  ;; first set clock low
+  lda #SPI_CLK
+  trb SPI_PORT
+
+;; inner loop is 33 cycles, including branch
+bitloop
+  txa               ; get remaining data from X (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  tax               ; temporarily store in X (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  dec SPI_PORT      ; 6 cycles -- BUG DON'T DO THIS ON LAST LOOP
+  dey               ; 2 cycles
+  bne bitloop       ; 3 cycles
+
+  ply
+  plx
+  rts
+
+
+;; Faster yet if I unroll the code. That means I don't need to store
+;; and restore X, nor test the number of counts.
+;;
+fastsendbyte
+  phy
+  tay               ; x will store the data as we transmit it
+
+  lda #SPI_CLK      ; load clock bit
+  trb SPI_PORT      ; drive clock low
+
+; bit 7
+  tya
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  dec SPI_PORT      ; 6 cycles
+
+; bit 6
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  dec SPI_PORT      ; 6 cycles
+
+; bit 5
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  dec SPI_PORT      ; 6 cycles
+
+; bit 4
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  dec SPI_PORT      ; 6 cycles
+
+; bit 3
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  dec SPI_PORT      ; 6 cycles
+
+; bit 2
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  dec SPI_PORT      ; 6 cycles
+
+; bit 1
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  dec SPI_PORT      ; 6 cycles
+
+; bit 0
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  ;; no need to drive clock high on last bit
+
+  ply
+  rts
+
+
+crlf
+  pha
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0d
+  sta ACIA_DATA
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0a
+  sta ACIA_DATA
+  pla
+  rts
+
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+
+hextable:        .byte "0123456789ABCDEF"

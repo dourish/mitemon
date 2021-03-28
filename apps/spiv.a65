@@ -166,166 +166,12 @@ RESET    = 32
 setup6522
   lda #$2f
   sta UVIA_DDRB
+  lda #%00100100    ; default values for each bit
+  sta SPI_PORT
   rts
 
 
 SPI_CMD=64
-
-cmd0
-  ;; set cs to 0
-  lda #SPI_CS
-  trb SPI_PORT
-
-  ;; send cmd0 (01+6*0 + 24*0 + 10010101)
-  lda #SPI_CMD+0
-  jsr sendbyte
-  lda #0
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  lda #%10010101    ; CRC plus end bit
-  jsr sendbyte
-
-  jsr setidle       ; set to idle to await input
-  jsr getresponse   ; get single byte response
-
-  ldy #SPI_CS+SPI_MOSI ; set CS and MOSI high to release card
-  sty SPI_PORT
-  rts
-
-setidle
-  ldy #%00000010    ; CLK off, MOSI high, CS low
-  sty SPI_PORT
-  rts  
-
-;; send an $ff... this is basically just about creating delays
-;; between commands
-sendff
-  ;; set cs to 1
-  lda #SPI_CS
-  tsb SPI_PORT
-  lda #$ff
-  jsr sendbyte
-  rts
-
-cmd8
-  ;; set cs to 0
-  lda #4
-  trb SPI_PORT
-
-  ;; send cmd8 with parameter 0x000001aa
-  lda #SPI_CMD+8
-  jsr sendbyte
-  lda #0
-  jsr sendbyte
-  jsr sendbyte
-  lda #1
-  jsr sendbyte
-  lda #$aa
-  jsr sendbyte
-  lda #$87          ; crc
-  jsr sendbyte
-
-  jsr setidle
-  jsr await40bits
-
-  lda #SPI_CS+SPI_MOSI  ; release card (CS and MOSI high)
-  sta SPI_PORT
-
-  rts
-
-cmd58
-  ;; set cs to 0
-  lda #4
-  trb SPI_PORT
-
-  ;; send cmd58
-  lda #SPI_CMD+58
-  jsr sendbyte
-  lda #0
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  lda #%01110101
-  jsr sendbyte
-
-  jsr setidle
-  jsr await40bits
-
-  lda #SPI_CS+SPI_MOSI  ; release card (CS and MOSI high)
-  sta SPI_PORT
-
-  rts
-
-
-cmd55
-  ;; set cs to 0
-  lda #SPI_CS
-  trb SPI_PORT
-
-  ;; send cmd55 with parameter 0
-  lda #SPI_CMD+55
-  jsr sendbyte
-  lda #0
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  lda #$95          ; crc
-  jsr sendbyte
-
-  jsr setidle
-  jsr getresponse
-  ldy #6
-  sty SPI_PORT
-  rts
-
-  
-acmd41
-  ;; set cs to 0
-  lda #4
-  trb SPI_PORT
-
-  lda #SPI_CMD+41
-  jsr sendbyte
-  lda #%01000000    ; bit 30 is HCS flag
-  jsr sendbyte
-  lda #16           ; bit 20 selects 3.2-3.3V
-  jsr sendbyte
-  lda #0
-  jsr sendbyte
-  jsr sendbyte
-  lda #$95          ; checksum, but doesn't matter in SPI mode?
-  jsr sendbyte
-
-  jsr setidle
-  jsr getresponse
-
-  ldy #6
-  sty SPI_PORT
-  rts
-
-cmd17
-  ;; set cs to 0
-  lda #SPI_CS
-  trb SPI_PORT
-
-  ;; send cmd17 with parameter 0
-  lda #SPI_CMD+17
-  jsr sendbyte
-  lda #0
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  lda #$95          ; crc, doesn't matter
-  jsr sendbyte
-
-  jsr setidle
-  jsr getresponse
-  rts
 
 
 gettoken
@@ -528,6 +374,8 @@ wrcommand
   pla               ; retreive value
   jsr sendbyte      ; send it
 
+  lda #SPI_MOSI     ; set MOSI high
+  tsb SPI_PORT
   lda #SPI_CS       ; set CS high
   tsb SPI_PORT
   rts
@@ -536,8 +384,11 @@ rdcommand
   ;; set CS low
   lda #SPI_CS
   trb SPI_PORT
-  ;; send DATAREAD
+  ;; send CMDREAD
   lda #CMDREAD
+  ;; set clock to zero before reading
+  lda SPI_CLK
+  trb SPI_PORT
   ;; receive data into A
   jsr getresponse
   pha
@@ -558,24 +409,37 @@ wrdata
   pla
   ;; send A
   jsr sendbyte
+  ;; set MOSI high
+  lda #SPI_MOSI
+  tsb SPI_PORT
   ;; set CS high
   lda #SPI_CS
   tsb SPI_PORT
   rts
 
 rddata
-  ;; set CS low
-  lda #SPI_CS
+  lda #SPI_CS       ; set CS low
   trb SPI_PORT
-  ;; send DATAREAD
-  lda #DATAREAD
-  ;; receive data into A
-  jsr getresponse
-  pha
-  ;; set CS high
-  lda #SPI_CS
+
+  lda #DATAREAD     ; send DATAREAD
+  jsr sendbyte
+
+  lda #SPI_MOSI     ; keep MOSI low while awaiting response
+  trb SPI_PORT
+
+  ;; set clock to zero before reading
+  lda SPI_CLK
+  trb SPI_PORT
+
+  jsr getresponse   ; get response into A
+  pha               ; cache it for a moment
+
+  lda #SPI_MOSI     ; set MOSI high
   tsb SPI_PORT
-  pla
+  lda #SPI_CS       ; set CS high
+  tsb SPI_PORT
+
+  pla               ; retreive data
   rts
 
 ;; write value in Y to register in A
@@ -592,6 +456,16 @@ writereg
 ;;;
 
 vidinit
+  ;; initial setup -- CLOCK high, MOSI high
+  lda #SPI_CLK
+  tsb SPI_PORT
+  lda #SPI_MOSI
+  tsb SPI_PORT
+
+  ;; hold chip select low (is this needed?)
+  lda #SPI_CS
+  trb SPI_PORT
+
   ;; hold reset low
   lda #RESET
   trb SPI_PORT
@@ -600,7 +474,33 @@ vidinit
   ;; set reset high
   lda #RESET
   tsb SPI_PORT
+  jsr delay1s
+
+  ;; chip select still low, but subsequent code will fix that
+
+  lda #0
+  jsr wrcommand
+  jsr rddata
+  cmp #$75
+  bne fail
+  lda #<successstr
+  sta PRINTVEC
+  lda #>successstr
+  sta PRINTVEC+1
+  jsr printvecstr
+  bra endvidinit
+fail
+  jsr putax
+  lda #<failstr
+  sta PRINTVEC
+  lda #>failstr
+  sta PRINTVEC+1
+  jsr printvecstr
+endvidinit  
   rts
+
+successstr .byte "reg 0 read successful", $0a, $0d, $0
+failstr    .byte " != 0x75", $0a, $0d, $0
 
 reginit
   lda #PLLC1
@@ -1119,8 +1019,12 @@ dotext
 textstr .byte "text mode set", 10, 13, $00
 
 dorw
+  lda #".
+  jsr puta
   lda #MWCR0
   jsr wrcommand
+  lda #".
+  jsr puta
   jsr rddata
   jsr putax
   jsr crlf
