@@ -154,6 +154,15 @@ delay1ms
   jsr delay200us
   jsr delay200us
   rts
+
+;; delay 100ms (400000 cycles in theory, but this is SUPER approximate).
+delay100ms
+  lda #98
+loop100ms
+  jsr delay1ms
+  dec
+  bne loop100ms
+  rts
   
 ;;; delay 1 second. This should come to exactly 4000000 cycles, including
 ;;; JSR/RTS.

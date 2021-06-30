@@ -121,6 +121,26 @@ table10
   .byte "rw", 0
   .word dorw
 table11
+  .word table12
+  .byte "vinit", 0
+  .word dovinit
+table12
+  .word table13
+  .byte "white", 0
+  .word dowhite
+table13
+  .word table14
+  .byte "red", 0
+  .word dored
+table14
+  .word table15
+  .byte "blue", 0
+  .word doblue
+table15
+  .word table16
+  .byte "reg88", 0
+  .word doreg88
+table16
   .word $0000            ; signals last entry in the table
   .byte "colors", $00
   .word docolors
@@ -152,6 +172,10 @@ table11
 ;;;    BUSY       PB4, ie 16
 ;;;    RESET      PB5, ie 32
 ;;;
+;;; Device is SPI Mode 0. This means:
+;;;   clock idles low
+;;;   clock active high
+;;;   data read on rising edge
 
 SPI_CLK  = 1
 SPI_MOSI = 2
@@ -166,12 +190,9 @@ RESET    = 32
 setup6522
   lda #$2f
   sta UVIA_DDRB
-  lda #%00100100    ; default values for each bit
+  lda #SPI_MOSI|RESET|SPI_CS
   sta SPI_PORT
   rts
-
-
-SPI_CMD=64
 
 
 gettoken
@@ -188,8 +209,8 @@ sendtoken
   rts
 
 
-
-sendbyte
+;; GET RID OF THIS
+oldsendbyte
   phy
   ldy #8
 sendloop
@@ -212,69 +233,141 @@ send
   ply
   rts
 
-;; wait for data by pulsing the clock until there's a zero on MISO
-awaitdata
-.(
-  inc SPI_PORT         ; set CLK high
-  bit SPI_PORT         ; check for data on MISO
-  bpl done          ; exit if we see a zdero
-  dec SPI_PORT         ; otherwise, set CLK low and 
-  bra awaitdata     ; loop around again
-done
-  dec SPI_PORT
-.)
-  rts
 
-;; wait with a timeout. if we don't hear something within 256 pulses,
-;; set carry flag and return
-awaittimeout
-.(
-  clc
-  ldy #0
-awaitloop
-  inc SPI_PORT
-  bit SPI_PORT
-  bpl done
-  dec SPI_PORT
-  dey
-  beq timeout
-  bra awaitloop
-timeout
-  sec
-  rts
-done
-  dec SPI_PORT
-  rts
-.)
+;;; Send a byte via SPI. This faster version of the original code
+;;; unrolls the loop and relies on shifts rather than branches to
+;;; determine the bit to send. This is written on the assumption
+;;; that the CLK signal idles low.
+;;;
+sendbyte
+  phy
+  ;tay               ; y will store the data as we transmit it
 
-;; wait for data and then receive a byte starting with zero
-awaitbyte
-  jsr awaitdata
-  lda #0
-  jmp recv7bits
-
-;; wait for byte with timeout (signalled with carry)
-awaitbto
-  jsr awaittimeout
-  bcs timeout
-  lda #0
-  jmp recv7bits
-timeout
-  rts
+; bit 7
+  ;tya
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
   
-await40bits
-  jsr awaitdata     ; wait for any data
-  jsr recv7bits     ; grab first 7 bits (presuming leading 0)
-  sta SCRATCH
-  jsr recv8bits     ; second byte
-  sta SCRATCH+1
-  jsr recv8bits     ; third byte
-  sta SCRATCH+2
-  jsr recv8bits     ; fourth byte
-  sta SCRATCH+3
-  jsr recv8bits     ; fifth byte
-  sta SCRATCH+4
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #2            ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  ;; NOTE used to have "dec SPI_PORT" right after the inc but I
+  ;; moved it down to even out the duty cycle. I strongly suspect
+  ;; that this is completely irrelevant. Once everything is working,
+  ;; try moving it back since the code reads better in its original
+  ;; configuration.
+
+; bit 6
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 5
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 4
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 3
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 2
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 1
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 0
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+  ;; set MOSI high at end
+  lda #SPI_MOSI
+  tsb SPI_PORT
+
+  dec SPI_PORT      ; 6 cycles
+
+  ply
   rts
+
 
 getresponse
 .(
@@ -291,8 +384,66 @@ timedout
   rts
 .)
 
-;; read a byte via SPI from SPI_PORT, returned in accumulator.
+;;; read a byte via SPI from SPI_PORT, returned in accumulator.
+;;; Assume the CLK idles low.
 recv8bits
+  phx               ; store X, since we'll use it (and can't use Y)
+  lda #0            ; zero out initial result
+
+  inc SPI_PORT      ; set CLK high for first bit
+  ldx SPI_PORT      ; read data
+  cpx #128          ; this sets carry flag to top bit
+  rol               ; shift carry into A
+  dec SPI_PORT      ; set clock off
+
+  inc SPI_PORT      ; set CLK high #2
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #3
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #4
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #5
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #6
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #7
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #8
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  plx               ; restore X
+  rts               ; return with data in A
+
+
+;;; GET RID OF THIS
+oldrecv8bits
   lda #0            ; zero out result
   inc SPI_PORT      ; set clock high
   lda SPI_PORT      ; read data
@@ -303,7 +454,7 @@ recv8bits
 
 ;; this is a separate entry point used when we've already read or
 ;; tested one bit.
-recv7bits           ; used to be a loop, unrolled for speed
+oldrecv7bits           ; used to be a loop, unrolled for speed
 .(
   phx               ; store X, since we'll use it (and can't use Y)
 
@@ -356,6 +507,8 @@ recv7bits           ; used to be a loop, unrolled for speed
 
 ;;; poll the WAIT flag until it goes high
 awaitfree
+  rts
+
   pha
 waitloop
   lda SPI_PORT
@@ -366,8 +519,9 @@ waitloop
 
 wrcommand
   pha               ; cache value
-  lda #SPI_CS       ; set CS to low
-  trb SPI_PORT
+  ; don't mess with CS any more
+  ;lda #SPI_CS       ; set CS to low
+  ;trb SPI_PORT
 
   lda #CMDWRITE     ; send CMDWRITE
   jsr sendbyte
@@ -376,33 +530,27 @@ wrcommand
 
   lda #SPI_MOSI     ; set MOSI high
   tsb SPI_PORT
-  lda #SPI_CS       ; set CS high
-  tsb SPI_PORT
+  ;lda #SPI_CS       ; set CS high
+  ;tsb SPI_PORT
   rts
 
 rdcommand
-  ;; set CS low
-  lda #SPI_CS
-  trb SPI_PORT
+  ;lda #SPI_CS       ; set CS low
+  ;trb SPI_PORT
   ;; send CMDREAD
-  lda #CMDREAD
-  ;; set clock to zero before reading
-  lda SPI_CLK
-  trb SPI_PORT
-  ;; receive data into A
-  jsr getresponse
-  pha
-  ;; set CS high
-  lda #SPI_CS
-  tsb SPI_PORT
-  pla
+  lda #CMDREAD      ; send CMDREAD
+  jsr getresponse   ; receive data into A
+  ;pha               ; cache it temporarily
+  ;lda #SPI_CS       ; set CS high
+  ;tsb SPI_PORT
+  ;pla               ; retrieve data
   rts
 
 wrdata
   pha
   ;; set CS low
-  lda #SPI_CS
-  trb SPI_PORT
+  ;lda #SPI_CS
+  ;trb SPI_PORT
   ;; send DATAWRITE
   lda #DATAWRITE
   jsr sendbyte
@@ -413,13 +561,13 @@ wrdata
   lda #SPI_MOSI
   tsb SPI_PORT
   ;; set CS high
-  lda #SPI_CS
-  tsb SPI_PORT
+  ;lda #SPI_CS
+  ;tsb SPI_PORT
   rts
 
 rddata
-  lda #SPI_CS       ; set CS low
-  trb SPI_PORT
+  ;lda #SPI_CS       ; set CS low
+  ;trb SPI_PORT
 
   lda #DATAREAD     ; send DATAREAD
   jsr sendbyte
@@ -427,17 +575,13 @@ rddata
   lda #SPI_MOSI     ; keep MOSI low while awaiting response
   trb SPI_PORT
 
-  ;; set clock to zero before reading
-  lda SPI_CLK
-  trb SPI_PORT
-
-  jsr getresponse   ; get response into A
+  jsr recv8bits     ; get response into A
   pha               ; cache it for a moment
 
   lda #SPI_MOSI     ; set MOSI high
   tsb SPI_PORT
-  lda #SPI_CS       ; set CS high
-  tsb SPI_PORT
+  ;lda #SPI_CS       ; set CS high
+  ;tsb SPI_PORT
 
   pla               ; retreive data
   rts
@@ -456,27 +600,28 @@ writereg
 ;;;
 
 vidinit
-  ;; initial setup -- CLOCK high, MOSI high
-  lda #SPI_CLK
-  tsb SPI_PORT
-  lda #SPI_MOSI
-  tsb SPI_PORT
+  ;; initial setup -- CLOCK high, MOSI high, RESET high, CS high
+  lda #SPI_CLK|SPI_MOSI|RESET|SPI_CS
+  sta SPI_PORT
 
-  ;; hold chip select low (is this needed?)
-  lda #SPI_CS
-  trb SPI_PORT
-
-  ;; hold reset low
-  lda #RESET
-  trb SPI_PORT
+  ;; for reset -- hold RESET, CLK, and MOSI all low
+  ;; that's basically everything except MISO, right?
+  lda #SPI_MISO
+  sta SPI_PORT
   ;; short pause
-  jsr delay1s
-  ;; set reset high
-  lda #RESET
-  tsb SPI_PORT
-  jsr delay1s
+  jsr delay100ms
+  ;; set RESET, CLK, MOSI and CS all high
+  lda #RESET|SPI_CLK|SPI_MOSI|SPI_CS
+  sta SPI_PORT
+  jsr delay100ms
 
-  ;; chip select still low, but subsequent code will fix that
+  ;; now set chip select low (and leave it there)
+  ;lda #SPI_CS
+  ;trb SPI_PORT
+  ; the TRB wasn't working? RESET was going low again?
+  lda #RESET|SPI_CLK|SPI_MOSI
+  sta SPI_PORT
+
 
   lda #0
   jsr wrcommand
@@ -636,6 +781,14 @@ reginit
 
   jsr delay1s
 
+  rts
+
+doreg88
+  lda #88
+  jsr wrcommand
+  jsr rddata
+  jsr putax
+  jsr crlf
   rts
 
 displayon
@@ -969,6 +1122,110 @@ rts
 initstr1 .byte "RA8875 reset", $0a, $0d, $00
 initstr2 .byte "registers set", $0a, $0d, $00
 initstr3 .byte "display enabled", $0a, $0d, $00
+
+dovinit
+  jsr vidinit
+  rts
+
+DLSTART=$80
+DLSTOP=$00
+DRAWSQUARE=$10
+FILL=$20
+
+setwhite
+  lda #$63
+  jsr wrcommand
+
+  ;writeData((color & 0xf800) >> 11)
+  lda #$1f
+  jsr wrdata
+
+  lda #$64
+  jsr wrcommand
+
+  ;writeData((color & 0x07e0) >> 5)
+  lda #$3f
+  jsr wrdata
+
+  lda #$65
+  jsr wrcommand
+  ;writeData((color & 0x001f))
+  lda #$1f
+  jsr wrdata
+  rts
+  
+
+setred
+  lda #$63
+  jsr wrcommand
+
+  ;writeData((color & 0xf800) >> 11)
+  lda #$1f
+  jsr wrdata
+
+  lda #$64
+  jsr wrcommand
+
+  ;writeData((color & 0x07e0) >> 5)
+  lda #0
+  jsr wrdata
+
+  lda #$65
+  jsr wrcommand
+  ;writeData((color & 0x001f))
+  lda #0
+  jsr wrdata
+  rts
+  
+
+setblue
+  lda #$63
+  jsr wrcommand
+
+  ;writeData((color & 0xf800) >> 11)
+  lda #0
+  jsr wrdata
+
+  lda #$64
+  jsr wrcommand
+
+  ;writeData((color & 0x07e0) >> 5)
+  lda #0
+  jsr wrdata
+
+  lda #$65
+  jsr wrcommand
+  ;writeData((color & 0x001f))
+  lda #$1f
+  jsr wrdata
+  rts
+  
+
+
+fillscreen
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+
+dowhite
+  jsr setwhite
+  jsr fillscreen
+  rts
+  
+doblue
+  jsr setblue
+  jsr fillscreen
+  rts
+  
+dored
+  jsr setred
+  jsr fillscreen
+  rts
 
 dotext
   lda #"1
