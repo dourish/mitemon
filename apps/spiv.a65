@@ -141,6 +141,18 @@ table15
   .byte "reg88", 0
   .word doreg88
 table16
+  .word table17
+  .byte "reginit", 0
+  .word doreginit
+table17
+  .word table18
+  .byte "display", 0
+  .word dodisplay
+table18
+  .word table19
+  .byte "reg0", 0
+  .word doreg0
+table19
   .word $0000            ; signals last entry in the table
   .byte "colors", $00
   .word docolors
@@ -519,9 +531,9 @@ waitloop
 
 wrcommand
   pha               ; cache value
-  ; don't mess with CS any more
-  ;lda #SPI_CS       ; set CS to low
-  ;trb SPI_PORT
+
+  lda #SPI_CS       ; set CS to low
+  trb SPI_PORT
 
   lda #CMDWRITE     ; send CMDWRITE
   jsr sendbyte
@@ -530,27 +542,30 @@ wrcommand
 
   lda #SPI_MOSI     ; set MOSI high
   tsb SPI_PORT
-  ;lda #SPI_CS       ; set CS high
-  ;tsb SPI_PORT
+
+  lda #SPI_CS       ; set CS high
+  tsb SPI_PORT
   rts
 
 rdcommand
-  ;lda #SPI_CS       ; set CS low
-  ;trb SPI_PORT
+  lda #SPI_CS       ; set CS low
+  trb SPI_PORT
+
   ;; send CMDREAD
   lda #CMDREAD      ; send CMDREAD
   jsr getresponse   ; receive data into A
-  ;pha               ; cache it temporarily
-  ;lda #SPI_CS       ; set CS high
-  ;tsb SPI_PORT
-  ;pla               ; retrieve data
+
+  pha               ; cache it temporarily
+  lda #SPI_CS       ; set CS high
+  tsb SPI_PORT
+  pla               ; retrieve data
   rts
 
 wrdata
   pha
   ;; set CS low
-  ;lda #SPI_CS
-  ;trb SPI_PORT
+  lda #SPI_CS
+  trb SPI_PORT
   ;; send DATAWRITE
   lda #DATAWRITE
   jsr sendbyte
@@ -561,13 +576,13 @@ wrdata
   lda #SPI_MOSI
   tsb SPI_PORT
   ;; set CS high
-  ;lda #SPI_CS
-  ;tsb SPI_PORT
+  lda #SPI_CS
+  tsb SPI_PORT
   rts
 
 rddata
-  ;lda #SPI_CS       ; set CS low
-  ;trb SPI_PORT
+  lda #SPI_CS       ; set CS low
+  trb SPI_PORT
 
   lda #DATAREAD     ; send DATAREAD
   jsr sendbyte
@@ -580,8 +595,8 @@ rddata
 
   lda #SPI_MOSI     ; set MOSI high
   tsb SPI_PORT
-  ;lda #SPI_CS       ; set CS high
-  ;tsb SPI_PORT
+  lda #SPI_CS       ; set CS high
+  tsb SPI_PORT
 
   pla               ; retreive data
   rts
@@ -648,19 +663,32 @@ successstr .byte "reg 0 read successful", $0a, $0d, $0
 failstr    .byte " != 0x75", $0a, $0d, $0
 
 reginit
+  lda #".
+  jsr puta
+
   lda #PLLC1
   ldy #PLLC1_PLLDIV1+11
   jsr writereg
   jsr delay1ms
+
+  lda #".
+  jsr puta
 
   lda #PLLC2
   ldy #PLLC2_DIV4
   jsr writereg
   jsr delay1ms
 
+  lda #".
+  jsr puta
+
   lda #SYSR
   ldy #SYSR_16BPP|SYSR_MCU8
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #PCSR
@@ -668,111 +696,194 @@ reginit
   jsr writereg
   jsr delay1ms
 
+  lda #".
+  jsr puta
+
   ;jsr awaitfree
   lda #HDWR
   ldy #99
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #HNDFTR
   ldy #HNDFTR_DE_HIGH
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #HNDR
   ldy #24
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #HSTR
   ldy #3
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #HPWR
   ldy #HPWR_LOW+11
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;; vertical settings registers
   ;jsr awaitfree
   lda #VDHR0
   ldy #<479
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #VDHR1
   ldy #>479
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #VNDR0
   ldy #32
   jsr writereg
+  jsr delay1ms
 
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #VNDR1
   ldy #0
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #VSTR0
   ldy #32
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #VSTR1
   ldy #0
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #VPWR
   ldy #VPWR_LOW+1
   jsr writereg
+  jsr delay1ms
 
 
   ;; active window X
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #HSAW0
   ldy #0
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #HSAW1
   ldy #0
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #HEAW0
   ldy #<799
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #HEAW1
   ldy #>799
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;; active window Y
   ;jsr awaitfree
   lda #VSAW0
   ldy #0
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #VSAW1
   ldy #0
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #VEAW0
   ldy #<799
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #VEAW1
   ldy #>799
   jsr writereg
+  jsr delay1ms
+
+  lda #".
+  jsr puta
 
   ;jsr awaitfree
   lda #MCLR
@@ -781,6 +892,7 @@ reginit
 
   jsr delay1s
 
+  jsr crlf
   rts
 
 doreg88
@@ -791,28 +903,53 @@ doreg88
   jsr crlf
   rts
 
+doreg0
+  lda #0
+  jsr wrcommand
+  jsr rddata
+  jsr putax
+  jsr crlf
+  rts
+
 displayon
 
+  lda #"a
+  jsr puta
+  
   ;tft.displayOn(true);
   lda #PWRR
   ldy #PWRR_NORMAL|PWRR_DISPON
   jsr writereg
+  
+  lda #"b
+  jsr puta
   
   ; tft.GPIOX(true);      // Enable TFT - display enable tied to GPIOX
   lda #GPIOX
   ldy #1
   jsr writereg
 
+  lda #"c
+  jsr puta
+  
   ; tft.PWM1config(true, RA8875_PWM_CLK_DIV1024); // PWM output for backlight
   lda #P1CR
   ldy #P1CR_ENABLE|PWM_CLK_DIV1024
   jsr writereg
+  
+  lda #"d
+  jsr puta
   
   ;tft.PWM1out(255);
   lda #P1DCR
   ldy #255
   jsr writereg
 
+  lda #"e
+  jsr puta
+
+  jsr crlf
+  
   rts
 
 
@@ -1125,6 +1262,14 @@ initstr3 .byte "display enabled", $0a, $0d, $00
 
 dovinit
   jsr vidinit
+  rts
+
+doreginit
+  jsr reginit
+  rts
+
+dodisplay
+  jsr displayon
   rts
 
 DLSTART=$80
