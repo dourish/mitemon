@@ -519,14 +519,12 @@ oldrecv7bits           ; used to be a loop, unrolled for speed
 
 ;;; poll the WAIT flag until it goes high
 awaitfree
-  rts
-
-  pha
-waitloop
-  lda SPI_PORT
-  and #BUSYMASK
-  beq waitloop
-  pla
+;  pha
+;waitloop
+;  lda SPI_PORT
+;  and #BUSYMASK
+;  beq waitloop
+;  pla
   rts
 
 wrcommand
@@ -1355,6 +1353,7 @@ fillscreen
   jsr wrdata
   lda #DLSTART|FILL|DRAWSQUARE
   jsr wrdata
+  rts
 
 
 dowhite
