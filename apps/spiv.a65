@@ -3,12 +3,16 @@
 ;;; the command line code from the monitor and the SPI code from FORTH
 ;;; moved to use the user VIA port and jammed together awkwardly.
 ;;;
+;;; Paul Dourish, June 2021
+;;;
+
+;;;
 ;;; Pinout from the 6522 (PORTB) to the RA8875 board is as follows:
 ;;; D0  CLK
 ;;; D1  MOSI
 ;;; D2  CS
-;;; D3  LIGHT
-;;; D4  BUSY
+;;; D3  LIGHT (currentl unused)
+;;; D4  BUSY (currently unused)
 ;;; D5  RESET
 ;;; D6  NC
 ;;; D7  MISO
@@ -16,9 +20,7 @@
 
 
 ;;;
-;;;
-;;;
-;;; definitions
+;;; Definitions for constants
 ;;;
 ;;;
 ;;;
@@ -185,14 +187,25 @@ table26
   .byte "size", 0
   .word dosize
 table27
+  .word table28
+  .byte "fg", 0
+  .word dofg
+table28
+  .word table29
+  .byte "bg", 0
+  .word dobg
+table29
+  .word table30
+  .byte "cls", 0
+  .word docls
+table30
   .word $0000            ; signals last entry in the table
   .byte "colors", $00
   .word docolors
 
 
-
 ;;;
-;;; SPI code
+;;; SECTION 1: Low-level SPI code
 ;;;
 ;;;
 
@@ -461,6 +474,10 @@ recv8bits
   rts               ; return with data in A
 
 
+;;;
+;;; SECTION 2: Read and set RA8875 registers
+;;;
+;;;
 
 ;;; poll the WAIT flag until it goes high
 awaitfree
@@ -554,9 +571,12 @@ writereg
 
 
 ;;;
-;;; RA8875 registers and controls
+;;; SECTION 3: Control RA8875 functions
+;;;
 ;;;
 
+;;; Initialize video processor
+;;;
 vidinit
   ;; initial setup -- CLOCK high, MOSI high, RESET high, CS high
   lda #SPI_CLK|SPI_MOSI|RESET|SPI_CS
@@ -574,13 +594,11 @@ vidinit
   jsr delay100ms
 
   ;; now set chip select low (and leave it there)
-  ;lda #SPI_CS
-  ;trb SPI_PORT
-  ; the TRB wasn't working? RESET was going low again?
   lda #RESET|SPI_CLK|SPI_MOSI
   sta SPI_PORT
 
 
+  ;; check things are okay -- read status register and confirm value
   lda #0
   jsr wrcommand
   jsr rddata
@@ -605,33 +623,24 @@ endvidinit
 successstr .byte "reg 0 read successful", $0a, $0d, $0
 failstr    .byte " != 0x75", $0a, $0d, $0
 
-reginit
-  lda #"a
-  jsr puta
 
+;;; Initialize registers to default settings
+;;;
+reginit
   lda #PLLC1
   ldy #PLLC1_PLLDIV1+11
   jsr writereg
   jsr delay1ms
-
-  lda #"b
-  jsr puta
 
   lda #PLLC2
   ldy #PLLC2_DIV4
   jsr writereg
   jsr delay1ms
 
-  lda #"c
-  jsr puta
-
   lda #SYSR
   ldy #SYSR_16BPP|SYSR_MCU8
   jsr writereg
   jsr delay1ms
-
-  lda #"d
-  jsr puta
 
   ;jsr awaitfree
   lda #PCSR
@@ -639,17 +648,11 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #"e
-  jsr puta
-
   ;jsr awaitfree
   lda #HDWR
   ldy #99
   jsr writereg
   jsr delay1ms
-
-  lda #"f
-  jsr puta
 
   ;jsr awaitfree
   lda #HNDFTR
@@ -657,17 +660,11 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #"g
-  jsr puta
-
   ;jsr awaitfree
   lda #HNDR
   ldy #3
   jsr writereg
   jsr delay1ms
-
-  lda #"h
-  jsr puta
 
   ;jsr awaitfree
   lda #HSTR
@@ -675,17 +672,11 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #"i
-  jsr puta
-
   ;jsr awaitfree
   lda #HPWR
   ldy #HPWR_LOW+11
   jsr writereg
   jsr delay1ms
-
-  lda #"j
-  jsr puta
 
   ;; vertical settings registers
   ;jsr awaitfree
@@ -694,17 +685,11 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #"k
-  jsr puta
-
   ;jsr awaitfree
   lda #VDHR1
   ldy #>479
   jsr writereg
   jsr delay1ms
-
-  lda #"l
-  jsr puta
 
   ;jsr awaitfree
   lda #VNDR0
@@ -712,18 +697,11 @@ reginit
   jsr writereg
   jsr delay1ms
 
-
-  lda #"m
-  jsr puta
-
   ;jsr awaitfree
   lda #VNDR1
   ldy #0
   jsr writereg
   jsr delay1ms
-
-  lda #"n
-  jsr puta
 
   ;jsr awaitfree
   lda #VSTR0
@@ -731,17 +709,11 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #"o
-  jsr puta
-
   ;jsr awaitfree
   lda #VSTR1
   ldy #0
   jsr writereg
   jsr delay1ms
-
-  lda #"p
-  jsr puta
 
   ;jsr awaitfree
   lda #VPWR
@@ -752,17 +724,11 @@ reginit
 
   ;; active window X
 
-  lda #"q
-  jsr puta
-
   ;jsr awaitfree
   lda #HSAW0
   ldy #0
   jsr writereg
   jsr delay1ms
-
-  lda #"r
-  jsr puta
 
   ;jsr awaitfree
   lda #HSAW1
@@ -770,26 +736,17 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #"s
-  jsr puta
-
   ;jsr awaitfree
   lda #HEAW0
   ldy #<799
   jsr writereg
   jsr delay1ms
 
-  lda #"t
-  jsr puta
-
   ;jsr awaitfree
   lda #HEAW1
   ldy #>799
   jsr writereg
   jsr delay1ms
-
-  lda #"u
-  jsr puta
 
   ;; active window Y
   ;jsr awaitfree
@@ -798,17 +755,11 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #"v
-  jsr puta
-
   ;jsr awaitfree
   lda #VSAW1
   ldy #0
   jsr writereg
   jsr delay1ms
-
-  lda #"w
-  jsr puta
 
   ;jsr awaitfree
   lda #VEAW0
@@ -816,17 +767,11 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #"x
-  jsr puta
-
   ;jsr awaitfree
   lda #VEAW1
   ldy #>479
   jsr writereg
   jsr delay1ms
-
-  lda #"y
-  jsr puta
 
   ;jsr awaitfree
   lda #MCLR
@@ -835,7 +780,6 @@ reginit
 
   jsr delay1s
 
-  jsr crlf
   rts
 
 doreg88
@@ -871,49 +815,31 @@ doreg0
   jsr crlf
   rts
 
+
+;;; Turn on display and backlight
+;;;
 displayon
 
-  lda #"a
-  jsr puta
-  
   ;tft.displayOn(true);
   lda #PWRR
   ldy #PWRR_NORMAL|PWRR_DISPON
   jsr writereg
-  
-;  jsr geta
-  lda #"b
-  jsr puta
   
   ; tft.GPIOX(true);      // Enable TFT - display enable tied to GPIOX
   lda #GPIOX
   ldy #1
   jsr writereg
 
-;  jsr geta
-  lda #"c
-  jsr puta
-  
   ; tft.PWM1config(true, RA8875_PWM_CLK_DIV1024); // PWM output for backlight
   lda #P1CR
   ldy #P1CR_ENABLE|PWM_CLK_DIV1024
   jsr writereg
-  
-;  jsr geta
-  lda #"d
-  jsr puta
   
   ;tft.PWM1out(255);
   lda #P1DCR
   ldy #255
   jsr writereg
 
-;  jsr geta
-  lda #"e
-  jsr puta
-
-  jsr crlf
-  
   rts
 
 doon
@@ -941,6 +867,8 @@ dooff
   jsr writereg
   rts
 
+;;; Mess around with the backlight/PWM setting?
+;;;
 dopwm
   phx
   ldx #5
@@ -962,6 +890,8 @@ pwmdelay
   plx
   rts
 
+;;; Look up current PWM setting
+;;;
 dopwmq
   lda #P1DCR
   jsr wrcommand
@@ -972,6 +902,7 @@ dopwmq
 
 
 ;;; set text colors (actually, either mode) -- fg white, bg black
+;;;
 setcolors
 
   ;; set foreground to white
@@ -1006,10 +937,9 @@ setcolors
   rts
 
 
-
 ;;;
 ;;;
-;;; MAIN CODE ENTRY POINT
+;;; MAIN CODE ENTRY POINT -- initialize and start main loop
 ;;;
 ;;;
 
@@ -1025,12 +955,14 @@ start
 
   jsr primm
   .byte "SPIV Video tester", $0d, $0a, $00
-  jsr dohelp
+  jsr dohelp        ; print the commands
+  jsr doinit        ; initialize the video board
+  jsr dotext        ; set text mode
 
 
 ;;;
 ;;;
-;;; COMMAND LINE INTERPRETER
+;;; SECTION 4: Command line interpreter
 ;;;
 ;;;
 
@@ -1187,11 +1119,12 @@ printerror
 
 
 ;;;
-;;;
-;;; COMMANDS CALLED FROM THE INTERPETER
+;;; SECTION 5: Implement interpreter commands
 ;;;
 ;;;
 
+;;; Print the help text
+;;;
 dohelp
   lda #<helpstring
   sta PRINTVEC
@@ -1200,6 +1133,9 @@ dohelp
   jsr printvecstr
   rts
 
+
+;;; Echo text from command line to display
+;;;
 doecho
   phx
   lda #MRWC
@@ -1233,6 +1169,8 @@ end
 .)
 
 
+;;; Quit program
+;;;
 doquit
   pla               ; drop the most recent return address
   pla               ; so that we will return instead to the monitor
@@ -1240,6 +1178,8 @@ doquit
   rts               ; exit
 
 
+;;; Initialize the display
+;;;
 doinit
   jsr primm
   .byte "initializing RA8875...", $0a, $0d, $0
@@ -1273,6 +1213,8 @@ DLSTOP=$00
 DRAWSQUARE=$10
 FILL=$20
 
+;;; Look up current fg color values
+;;;
 docolorq
   lda #$63
   jsr wrcommand
@@ -1365,8 +1307,37 @@ setblue
   rts
   
 
-
+;;; fill screen with the current foreground color
+;;;
 fillscreen
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy #0
+  jsr writereg
+  ldy #0
+  lda #$92
+  jsr writereg
+  ldy #0
+  lda #$93
+  jsr writereg
+  ldy #0
+  lda #$94
+  jsr writereg
+
+  lda #$95
+  ldy #$1F          ; lower byte for 799
+  jsr writereg
+  lda #$96
+  ldy #03           ; upper byte for 799
+  jsr writereg
+
+  lda #$97
+  ldy #$df          ; lower byte for 479
+  jsr writereg
+  lda #$98          
+  ldy #$01          ; upper byte for 479
+  jsr writereg
+
   lda #DCR
   jsr wrcommand
   
@@ -1379,26 +1350,165 @@ fillscreen
 
 dowhite
   jsr primm
-  .byte "Setting white background", $0d, $0a, $0
-  jsr setwhite
-  jsr fillscreen
+  .byte "Setting white", $0d, $0a, $0
+;  jsr setwhite
+;  jsr fillscreen
+  lda #7
+  jsr fillcolor
   rts
   
 doblue
   jsr primm
-  .byte "Setting blue background", $0d, $0a, $0
-  jsr setblue
-  jsr fillscreen
+  .byte "Setting blue", $0d, $0a, $0
+;  jsr setblue
+;  jsr fillscreen
+  lda #3
+  jsr fillcolor
   rts
   
 dored
   jsr primm
-  .byte "Setting red background", $0d, $0a, $0
-  jsr setred
-  jsr fillscreen
+  .byte "Setting red", $0d, $0a, $0
+;  jsr setred
+;  jsr fillscreen
+  lda #1
+  jsr fillcolor
   rts
 
-;; set text mode, text font, text color, and text direction
+;;; fill the screen with the color from the color table specified in
+;;; the accumulator. Set color back to current setting afterwards.
+;;;
+fillcolor
+  sta SCRATCH       ; temporarily store color
+  
+  ;; look up current color values and save them
+  lda #$63
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  lda #$64
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  lda #$65
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  ;; set fg color
+  lda SCRATCH
+  jsr setfg
+
+  ;; fill screen
+  jsr fillscreen
+  jsr delay100ms
+
+  ;; reset color
+  pla
+  tay
+  lda #$65
+  jsr writereg
+  pla
+  tay
+  lda #$64
+  jsr writereg
+  pla
+  tay
+  lda #$63
+  jsr writereg
+  rts
+
+;;; set foreground color to values from color table indexed by A
+;;;
+setfg
+  sta SCRATCH       ; cache A then multiply by 3
+  asl               ; = *2
+  clc
+  adc SCRATCH       ; = *3
+  sta SCRATCH       ; store it because I can't rely on Y
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$63          ; register to A
+  jsr writereg      ; store Y in A
+  inc SCRATCH       ; move on to next value
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$64          ; register to A
+  jsr writereg      ; store Y in A
+  inc SCRATCH       ; move on to next value
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$65          ; register to A
+  jsr writereg      ; store Y in A
+
+  rts
+
+;;; set background color to values from color table indexed by A
+;;;
+setbg
+  sta SCRATCH       ; cache A then multiply by 3
+  asl               ; = *2
+  clc
+  adc SCRATCH       ; = *3
+  sta SCRATCH       ; store it because I can't rely on Y
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$60          ; register to A
+  jsr writereg      ; store Y in A
+  inc SCRATCH       ; move on to next value
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$61          ; register to A
+  jsr writereg      ; store Y in A
+  inc SCRATCH       ; move on to next value
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$62          ; register to A
+  jsr writereg      ; store Y in A
+
+  rts
+
+;;; clear screen
+;;;
+docls
+  ;; fill the screen with black
+  lda #0            ; color 0 is black
+  jsr fillcolor
+
+  ;; reset the text position
+  ldy #0
+  lda #$2a
+  jsr writereg
+  ldy #0
+  lda #$2b
+  jsr writereg
+  ldy #0
+  lda #$2c
+  jsr writereg
+  lda #$2d
+  ldy #0
+  jsr writereg
+
+  ;; reset the text color (already done?)
+  rts
+
+
+;;; set text mode, text font, text color, and text direction
+;;;
 dotext
   ;; wait until free
   jsr awaitfree
@@ -1582,11 +1692,70 @@ fontloop
 endfont
   rts
 
-;;;;;;;;;;;;;
+;;; set foreground color
+dofg
+  phx
+
+  ;; get the first parameter, if present
+  ldy #1
+  cpy ARGINDEX
+  beq endsize
+  iny
+  ldx ARGINDEX,y
+  lda INPUT,x
+
+  ;; assuming it's a single digit, convert to a number
+  sec
+  sbc #"0
+
+  ; set color
+  jsr setfg
+
+  plx
+  rts
+
+;;; set foreground color
+dobg
+  phx
+
+  ;; get the first parameter, if present
+  ldy #1
+  cpy ARGINDEX
+  beq endsize
+  iny
+  ldx ARGINDEX,y
+  lda INPUT,x
+
+  ;; assuming it's a single digit, convert to a number
+  sec
+  sbc #"0
+
+  ; set color
+  jsr setbg
+
+  plx
+  rts
+
+;;; color lookup table
+;;; RA8875 uses five bits for blue, six for green, and five for red.
+;;; Rather than extract them from 16-bit values, I've just precomputed
+;;; some colors here and can use index into this table as a color value.
+;;; color 0 = black, color 8 = white, and the others are a random selection.
+colors
+  .byte $00, $00, $00    ; black
+  .byte $1F, $00, $00    ; red
+  .byte $00, $3F, $00    ; green
+  .byte $00, $00, $1F    ; blue
+  .byte $00, $3F, $1F    ; cyan
+  .byte $10, $00, $10
+  .byte $10, $20, $00
+  .byte $1F, $3F, $1F    ; white
+
+
 ;;;
-;;; Various utility routines
+;;; SECTION 6: Various utility routines
 ;;;
-;;;;;;;;;;;;;
+;;;
 
 ;;;
 ;;; Ouptut carriage return and line feed
