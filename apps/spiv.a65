@@ -153,6 +153,30 @@ table18
   .byte "reg0", 0
   .word doreg0
 table19
+  .word table20
+  .byte "on", 0
+  .word doon
+table20
+  .word table21
+  .byte "off", 0
+  .word dooff
+table21
+  .word table22
+  .byte "20reg", 0
+  .word do20reg
+table22
+  .word table23
+  .byte "pwm", 0
+  .word dopwm
+table23
+  .word table24
+  .byte "color?", 0
+  .word docolorq
+table24
+  .word table25
+  .byte "pwm?", 0
+  .word dopwmq
+table25
   .word $0000            ; signals last entry in the table
   .byte "colors", $00
   .word docolors
@@ -661,7 +685,7 @@ successstr .byte "reg 0 read successful", $0a, $0d, $0
 failstr    .byte " != 0x75", $0a, $0d, $0
 
 reginit
-  lda #".
+  lda #"a
   jsr puta
 
   lda #PLLC1
@@ -669,7 +693,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"b
   jsr puta
 
   lda #PLLC2
@@ -677,7 +701,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"c
   jsr puta
 
   lda #SYSR
@@ -685,7 +709,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"d
   jsr puta
 
   ;jsr awaitfree
@@ -694,7 +718,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"e
   jsr puta
 
   ;jsr awaitfree
@@ -703,7 +727,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"f
   jsr puta
 
   ;jsr awaitfree
@@ -712,16 +736,16 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"g
   jsr puta
 
   ;jsr awaitfree
   lda #HNDR
-  ldy #24
+  ldy #3
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"h
   jsr puta
 
   ;jsr awaitfree
@@ -730,7 +754,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"i
   jsr puta
 
   ;jsr awaitfree
@@ -739,7 +763,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"j
   jsr puta
 
   ;; vertical settings registers
@@ -749,7 +773,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"k
   jsr puta
 
   ;jsr awaitfree
@@ -758,17 +782,17 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"l
   jsr puta
 
   ;jsr awaitfree
   lda #VNDR0
-  ldy #32
+  ldy #31
   jsr writereg
   jsr delay1ms
 
 
-  lda #".
+  lda #"m
   jsr puta
 
   ;jsr awaitfree
@@ -777,16 +801,16 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"n
   jsr puta
 
   ;jsr awaitfree
   lda #VSTR0
-  ldy #32
+  ldy #22
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"o
   jsr puta
 
   ;jsr awaitfree
@@ -795,7 +819,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"p
   jsr puta
 
   ;jsr awaitfree
@@ -807,7 +831,7 @@ reginit
 
   ;; active window X
 
-  lda #".
+  lda #"q
   jsr puta
 
   ;jsr awaitfree
@@ -816,7 +840,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"r
   jsr puta
 
   ;jsr awaitfree
@@ -825,7 +849,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"s
   jsr puta
 
   ;jsr awaitfree
@@ -834,7 +858,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"t
   jsr puta
 
   ;jsr awaitfree
@@ -843,7 +867,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"u
   jsr puta
 
   ;; active window Y
@@ -853,7 +877,7 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"v
   jsr puta
 
   ;jsr awaitfree
@@ -862,25 +886,25 @@ reginit
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"w
   jsr puta
 
   ;jsr awaitfree
   lda #VEAW0
-  ldy #<799
+  ldy #<479
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"x
   jsr puta
 
   ;jsr awaitfree
   lda #VEAW1
-  ldy #>799
+  ldy #>479
   jsr writereg
   jsr delay1ms
 
-  lda #".
+  lda #"y
   jsr puta
 
   ;jsr awaitfree
@@ -901,6 +925,23 @@ doreg88
   jsr crlf
   rts
 
+do20reg
+  ldy #0
+regloop
+  tya
+  jsr wrcommand
+  jsr rddata
+  jsr putax
+  lda #32
+  jsr puta
+  iny
+  cpy #20
+  bne regloop
+  jsr crlf
+  rts
+  
+
+
 doreg0
   lda #0
   jsr wrcommand
@@ -919,6 +960,7 @@ displayon
   ldy #PWRR_NORMAL|PWRR_DISPON
   jsr writereg
   
+;  jsr geta
   lda #"b
   jsr puta
   
@@ -927,6 +969,7 @@ displayon
   ldy #1
   jsr writereg
 
+;  jsr geta
   lda #"c
   jsr puta
   
@@ -935,6 +978,7 @@ displayon
   ldy #P1CR_ENABLE|PWM_CLK_DIV1024
   jsr writereg
   
+;  jsr geta
   lda #"d
   jsr puta
   
@@ -943,6 +987,7 @@ displayon
   ldy #255
   jsr writereg
 
+;  jsr geta
   lda #"e
   jsr puta
 
@@ -950,39 +995,85 @@ displayon
   
   rts
 
+doon
+  ; tft.PWM1config(true, RA8875_PWM_CLK_DIV1024); // PWM output for backlight
+  lda #P1CR
+  ldy #P1CR_ENABLE|PWM_CLK_DIV1024
+  jsr writereg
+  
+  ;tft.PWM1out(255);
+  lda #P1DCR
+  ldy #255
+  jsr writereg
+  rts
 
+dooff
+  lda #P1CR
+  ldy #P1CR_ENABLE|PWM_CLK_DIV1024
+  jsr writereg
+  
+  lda #"d
+  jsr puta
+  
+  lda #P1DCR
+  ldy #0
+  jsr writereg
+  rts
+
+dopwm
+  phx
+  ldx #5
+  txa
+pwmloop
+  tay
+  lda #P1DCR
+  jsr writereg
+  ldy #255
+pwmdelay
+  dey
+  bne pwmdelay
+  txa
+  clc
+  adc #5
+  tax
+  cmp #255
+  bne pwmloop
+  plx
+  rts
+
+dopwmq
+  lda #P1DCR
+  jsr wrcommand
+  jsr rddata
+  jsr putax
+  jsr crlf
+  rts
+
+
+;;; set text colors (actually, either mode) -- fg white, bg black
 setcolors
 
   ;; set foreground to white
   jsr awaitfree
   lda #$63
-  jsr wrcommand
-  lda #31
-  jsr wrdata
+  ldy #$1f
+  jsr writereg
+
   lda #$64
-  jsr wrcommand
-  lda #0
-  jsr wrdata
+  ldy #$3f
+  jsr writereg
+
   lda #$65
-  jsr wrcommand
-  lda #0
-  jsr wrdata
+  lda #$1f
+  jsr writereg
 
-  ;; set background to black
-  jsr awaitfree
+  ldy#0
   lda #$60
-  jsr wrcommand
-  lda #0
-  jsr wrdata
+  jsr writereg
   lda #$61
-  jsr wrcommand
-  lda #0
-  jsr wrdata
+  jsr writereg
   lda #$62
-  jsr wrcommand
-  lda #0
-  jsr wrdata
-
+  jsr writereg
   
   ;; Clear transparency flag
   lda #$22
@@ -1011,11 +1102,9 @@ start
 
   jsr setup6522     ; set up the port
 
-  lda #<greeting
-  sta PRINTVEC
-  lda #>greeting+1
-  sta PRINTVEC+1
-  jsr printvecstr
+  jsr primm
+  .byte "SPIV Video tester", $0d, $0a, $00
+  jsr dohelp
 
 
 ;;;
@@ -1191,6 +1280,9 @@ dohelp
   rts
 
 doecho
+  phx
+  lda #MRWC
+  jsr wrcommand
 .(
   ldy #1                  ; start at 1 because we ignore the command itself
 echonext
@@ -1201,21 +1293,20 @@ echonext
   ;; not using printvecstr for this because we're printing
   ;; directly out of the input buffer  
 next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
   lda INPUT,x
   beq endofarg
-  sta ACIA_DATA
+  jsr puta
+  jsr wrdata
   inx
   jmp next_char
 endofarg
   lda #32                  ; put a space at the end
   jsr puta
+  jsr wrdata
   jmp echonext
 end
-  jsr crlf                 ; carriage return/line feed
+
+  jsr crlf
   plx                      ; restore the stack pointer
   rts
 .)
@@ -1229,34 +1320,20 @@ doquit
 
 
 doinit
+  jsr primm
+  .byte "initializing RA8875...", $0a, $0d, $0
   jsr vidinit
 
-  lda #<initstr1
-  sta PRINTVEC
-  lda #>initstr1
-  sta PRINTVEC+1
-  jsr printvecstr
-
+  jsr primm
+  .byte "initializing registers...", $0a, $0d, $0
   jsr reginit
 
-  lda #<initstr2
-  sta PRINTVEC
-  lda #>initstr2
-  sta PRINTVEC+1
-  jsr printvecstr
-
+  jsr primm
+  .byte "turning display on...", $0a, $0d, $0
   jsr displayon
   
-  lda #<initstr3
-  sta PRINTVEC
-  lda #>initstr3
-  sta PRINTVEC+1
-  jsr printvecstr
-rts
+  rts
 
-initstr1 .byte "RA8875 reset", $0a, $0d, $00
-initstr2 .byte "registers set", $0a, $0d, $00
-initstr3 .byte "display enabled", $0a, $0d, $00
 
 dovinit
   jsr vidinit
@@ -1274,6 +1351,29 @@ DLSTART=$80
 DLSTOP=$00
 DRAWSQUARE=$10
 FILL=$20
+
+docolorq
+  lda #$63
+  jsr wrcommand
+  jsr rddata
+  jsr putax
+  lda #32
+  jsr puta
+
+  lda #$64
+  jsr wrcommand
+  jsr rddata
+  jsr putax
+  lda #32
+  jsr puta
+
+  lda #$65
+  jsr wrcommand
+  jsr rddata
+  jsr putax
+  jsr crlf
+
+  rts
 
 setwhite
   lda #$63
@@ -1357,36 +1457,34 @@ fillscreen
 
 
 dowhite
+  jsr primm
+  .byte "Setting white background", $0d, $0a, $0
   jsr setwhite
   jsr fillscreen
   rts
   
 doblue
+  jsr primm
+  .byte "Setting blue background", $0d, $0a, $0
   jsr setblue
   jsr fillscreen
   rts
   
 dored
+  jsr primm
+  .byte "Setting red background", $0d, $0a, $0
   jsr setred
   jsr fillscreen
   rts
 
+;; set text mode, text font, text color, and text direction
 dotext
-  lda #"1
-  jsr puta
-
   ;; wait until free
   jsr awaitfree
-
-  lda #"2
-  jsr puta
 
   ;; send command 0x40 (MWCR0 register)
   lda #$40
   jsr wrcommand
-
-  lda #"3
-  jsr puta
 
   ;; read response
   jsr rddata
@@ -1395,9 +1493,6 @@ dotext
   ;; write it back as data
   jsr wrdata
 
-  lda #"4
-  jsr puta
-
   ;; font selection
   lda #$21
   jsr wrcommand
@@ -1405,19 +1500,12 @@ dotext
   and #%0101111     ; clear bits 7 and 5
   jsr wrdata
 
-  lda #"5
-  jsr puta
-
   jsr setcolors
 
-  lda #<textstr
-  sta PRINTVEC
-  lda #>textstr
-  sta PRINTVEC+1
-  jsr printvecstr
-  rts
+  jsr primm
+  .byte "text mode set", $0a, $0d, $00
 
-textstr .byte "text mode set", 10, 13, $00
+  rts
 
 dorw
   lda #".
@@ -1460,6 +1548,11 @@ curstr .byte "cursor on", 10, 13, 0
 
 
 dograph
+  lda #MWCR0
+  jsr wrcommand
+  jsr rddata
+  and #127       ; turn off bit 7
+  jsr wrdata
   rts
 
 dohello
@@ -1482,7 +1575,7 @@ endstr
   rts
 .)
 
-hellostr .byte "Hello hello hello hello hello", $00
+hellostr .byte "Hello hello hello from the Mite/RA8875 ", $00
 hdonestr .byte "written", 10, 13, $0
 
 dosquares
@@ -1553,6 +1646,19 @@ wait_txd_empty
   beq wait_txd_empty
   pla
   sta ACIA_DATA
+.)
+  rts
+
+;;;
+;;; get a character code, left in the accumulator
+;;;
+geta
+.(
+wait_rxd_empty
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_empty
+  lda ACIA_DATA
 .)
   rts
 
@@ -1654,6 +1760,29 @@ endstr
   rts
 
 
+DPL     =   $fd
+DPH     =   $fe
+primm:
+      pla               ; get low part of (string address-1)
+      sta   DPL
+      pla               ; get high part of (string address-1)
+      sta   DPH
+      bra   primm3
+primm2:
+      jsr   puta        ; output a string char
+primm3:
+      inc   DPL         ; advance the string pointer
+      bne   primm4
+      inc   DPH
+primm4:
+      lda   (DPL)       ; get string char
+      bne   primm2      ; output and continue if not NUL
+      lda   DPH
+      pha
+      lda   DPL
+      pha
+      rts               ; proceed at code following the NUL
+
 
 
 ;;;
@@ -1663,5 +1792,6 @@ endstr
 hextable:	 .byte "0123456789ABCDEF"
 greeting:	 .byte "SPI Video test", $0d, $0a, $00
 prompt:		 .byte "-"
-helpstring:	 .byte "Commands available: help, init, text, rw, graph, echo, squares, light, cursor, colors, hello, quit", $0d, $0a, $00
+helpstring:	 .byte "Commands: help, init, vinit, reginit, display, on, off, pwm, pwm?, color?, white, blue, red, 20reg, reg88, "
+		 .byte "text, rw, graph, echo, squares, light, cursor, colors, hello, quit", $0d, $0a, $00
 nocmderrstr:	 .byte "Command not recognized", $0d, $0a, $00
