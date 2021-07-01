@@ -177,6 +177,14 @@ table24
   .byte "pwm?", 0
   .word dopwmq
 table25
+  .word table26
+  .byte "font", 0
+  .word dofont
+table26
+  .word table27
+  .byte "size", 0
+  .word dosize
+table27
   .word $0000            ; signals last entry in the table
   .byte "colors", $00
   .word docolors
@@ -242,31 +250,6 @@ gettoken
 sendtoken
   lda #254
   jsr sendbyte
-  rts
-
-
-;; GET RID OF THIS
-oldsendbyte
-  phy
-  ldy #8
-sendloop
-  asl
-  pha
-  bcc sendzero
-sendone
-  lda #SPI_MOSI
-  tsb SPI_PORT
-  bra send
-sendzero
-  lda #SPI_MOSI
-  trb SPI_PORT
-send
-  inc SPI_PORT
-  dec SPI_PORT
-  pla
-  dey
-  bne sendloop
-  ply
   rts
 
 
@@ -477,68 +460,6 @@ recv8bits
   plx               ; restore X
   rts               ; return with data in A
 
-
-;;; GET RID OF THIS
-oldrecv8bits
-  lda #0            ; zero out result
-  inc SPI_PORT      ; set clock high
-  lda SPI_PORT      ; read data
-  cmp #128          ; this sets carry flag to top bit
-  rol               ; shift carry into A
-  dec SPI_PORT      ; set clock off
-  ;; now fall through to receive next seven bits
-
-;; this is a separate entry point used when we've already read or
-;; tested one bit.
-oldrecv7bits           ; used to be a loop, unrolled for speed
-.(
-  phx               ; store X, since we'll use it (and can't use Y)
-
-  inc SPI_PORT      ; set CLK high #1
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
-
-  inc SPI_PORT      ; set CLK high #2
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
-
-  inc SPI_PORT      ; set CLK high #3
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
-
-  inc SPI_PORT      ; set CLK high #4
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
-
-  inc SPI_PORT      ; set CLK high #5
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
-
-  inc SPI_PORT      ; set CLK high #6
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
-
-  inc SPI_PORT      ; set CLK high #7
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
-
-  plx               ; restore X
-.)
-  rts               ; return with data in A
 
 
 ;;; poll the WAIT flag until it goes high
@@ -1519,32 +1440,29 @@ dorw
   jsr crlf
   rts
 
+;;; Turn on hardware cursor
+;;;
 docursor
   lda #MWCR0
   jsr wrcommand
   jsr rddata
-  ora MWCR0_CURSOR
+  ora #MWCR0_CURSOR
   jsr wrdata
 
   lda #MWCR0
   jsr wrcommand
   jsr rddata
-  ora MWCR0_BLINK
+  ora #MWCR0_BLINK
   jsr wrdata
 
   lda #BTCR
   jsr wrcommand
-  lda #128
+  lda #32           ; just keep tweaking until I like the result
   jsr wrdata
 
-  lda #<curstr
-  sta PRINTVEC
-  lda #>curstr
-  sta PRINTVEC+1
-  jsr printvecstr
+  jsr primm
+  .byte "cursor enabled", $0a, $0d, $0
   rts
-
-curstr .byte "cursor on", 10, 13, 0
 
 
 dograph
@@ -1555,6 +1473,8 @@ dograph
   jsr wrdata
   rts
 
+;;; Display standardized "hello" message
+;;; 
 dohello
 .(
   lda #MRWC
@@ -1600,8 +1520,67 @@ lightoff
   rts
 
 
+;;; Set text size (range 0-3)
+;;;
+dosize
+  phx
+
+  ;; get the first parameter, if present
+  ldy #1
+  cpy ARGINDEX
+  beq endsize
+  iny
+  ldx ARGINDEX,y
+  lda INPUT,x
+
+  ;; assuming it's a single digit, convert to a number
+  sec
+  sbc #"0
+  cmp #3
+  beq setsize
+  bmi setsize
+  lda #3
+
+setsize
+  ;; set register
+  tay
+  lda #$22          ; $22 = FNCR1
+  jsr wrcommand
+  jsr rddata
+
+  and #$f0          ; clear bits 0-3
+  sta SCRATCH
+  tya
+  asl               ; or with scale << 2 (horizontal)
+  asl
+  ora SCRATCH
+  sta SCRATCH
+  tya               ; then or with scale (vertical)
+  ora SCRATCH
+  sta SCRATCH
+
+  jsr wrdata
+
+endsize
+  plx
+  rts
 
 
+;;; display the font (characters 0x20-0x7f)
+;;;
+dofont
+  lda #MRWC
+  jsr wrcommand
+  ldy #31
+fontloop
+  iny
+  cpy #$80
+  beq endfont
+  tya
+  jsr wrdata
+  bra fontloop
+endfont
+  rts
 
 ;;;;;;;;;;;;;
 ;;;
@@ -1668,6 +1647,7 @@ wait_rxd_empty
 ;;;
 putax
 .(
+  pha
   phy
 
   pha
@@ -1698,6 +1678,7 @@ wait_txd_empty2
   sta ACIA_DATA
 .)
   ply
+  pla
   rts
 
 
@@ -1793,5 +1774,5 @@ hextable:	 .byte "0123456789ABCDEF"
 greeting:	 .byte "SPI Video test", $0d, $0a, $00
 prompt:		 .byte "-"
 helpstring:	 .byte "Commands: help, init, vinit, reginit, display, on, off, pwm, pwm?, color?, white, blue, red, 20reg, reg88, "
-		 .byte "text, rw, graph, echo, squares, light, cursor, colors, hello, quit", $0d, $0a, $00
+		 .byte "text, rw, graph, echo, squares, light, cursor, colors, hello, size, font, quit", $0d, $0a, $00
 nocmderrstr:	 .byte "Command not recognized", $0d, $0a, $00
