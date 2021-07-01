@@ -120,8 +120,8 @@ table9
   .word docursor
 table10
   .word table11
-  .byte "rw", 0
-  .word dorw
+  .byte "pos", 0
+  .word dopos
 table11
   .word table12
   .byte "vinit", 0
@@ -168,8 +168,8 @@ table21
   .word do20reg
 table22
   .word table23
-  .byte "pwm", 0
-  .word dopwm
+  .byte "nl", 0
+  .word donl
 table23
   .word table24
   .byte "color?", 0
@@ -566,6 +566,11 @@ writereg
   jsr wrcommand
   tya
   jsr wrdata
+  rts
+
+readreg
+  jsr wrcommand
+  jsr rddata
   rts
   
 
@@ -1403,7 +1408,7 @@ fillcolor
 
   ;; fill screen
   jsr fillscreen
-  jsr delay100ms
+  jsr delay100ms    ; BUG should poll register to determine readiness
 
   ;; reset color
   pla
@@ -1481,6 +1486,56 @@ setbg
   jsr writereg      ; store Y in A
 
   rts
+
+;;; print current text cursor position
+;;;
+dopos
+  lda #$2b
+  jsr readreg
+  jsr putax
+  lda #$2a
+  jsr readreg
+  jsr putax
+  lda #",
+  jsr puta
+  lda #$2d
+  jsr readreg
+  jsr putax
+  lda #$2c
+  jsr readreg
+  jsr putax
+  jsr crlf
+  rts
+
+;;; move to the start of a new line. set horizontal position to zero, and
+;;; increment vertical position by 16.
+donl
+  ldy #0            ; set $2a and $2b, horizontal position, to 0
+  lda #$2b
+  jsr writereg
+  lda #$2a
+  jsr writereg
+
+  lda #$2d          ; read MSB of vertical position
+  jsr readreg
+  tay               ; cache it in Y
+  lda #$2c          ; read LSB of vertial position
+  jsr readreg
+  clc
+  adc #16           ; add 16
+  pha               ; temporaily store on stack
+  tya               ; get MSB again
+  adc #0            ; process the carry
+  tay               ; write to Y
+  lda #$2d          ; write value of Y to $2d (MSB)
+  jsr writereg
+  ply               ; retreive LSB cached on stack
+  lda #$2c          ; write to LSB register
+  jsr writereg
+  rts
+
+  
+  
 
 ;;; clear screen
 ;;;
@@ -1747,8 +1802,8 @@ colors
   .byte $00, $3F, $00    ; green
   .byte $00, $00, $1F    ; blue
   .byte $00, $3F, $1F    ; cyan
-  .byte $10, $00, $10
-  .byte $10, $20, $00
+  .byte $1F, $00, $1F    ; magenta
+  .byte $1F, $3F, $00    ; yellow
   .byte $1F, $3F, $1F    ; white
 
 
@@ -1942,6 +1997,6 @@ primm4:
 hextable:	 .byte "0123456789ABCDEF"
 greeting:	 .byte "SPI Video test", $0d, $0a, $00
 prompt:		 .byte "-"
-helpstring:	 .byte "Commands: help, init, vinit, reginit, display, on, off, pwm, pwm?, color?, white, blue, red, 20reg, reg88, "
-		 .byte "text, rw, graph, echo, squares, light, cursor, colors, hello, size, font, quit", $0d, $0a, $00
+helpstring:	 .byte "Commands: help, init, vinit, reginit, display, pwm, pwm?, color?, white, blue, red, 20reg, reg88, "
+		 .byte "text, pos, graph, echo, squares, light, cursor, colors, hello, size, font, cls, quit", $0d, $0a, $00
 nocmderrstr:	 .byte "Command not recognized", $0d, $0a, $00
