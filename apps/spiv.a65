@@ -1332,8 +1332,8 @@ fillscreen
   jsr wrdata
   rts
 
-;;; draw a rectangle, presuming that it's already all set up
-drawrect
+;;; draw a filled rectangle, presuming that it's already all set up
+fillrect
   lda #DCR
   jsr wrcommand
   
@@ -1669,7 +1669,7 @@ dosquares
   lda #20
   ldy #20
   jsr setsquarexy
-  jsr drawrect
+  jsr fillrect
 
   ;; one red square
   lda #1
@@ -1678,7 +1678,7 @@ dosquares
   lda #30
   ldy #20
   jsr setsquarexy
-  jsr drawrect
+  jsr fillrect
 
   ;; one cyan square
   lda #4
@@ -1687,7 +1687,7 @@ dosquares
   lda #40
   ldy #20
   jsr setsquarexy
-  jsr drawrect
+  jsr fillrect
 
   ;; one yellow square
   lda #6
@@ -1696,12 +1696,12 @@ dosquares
   lda #50
   ldy #20
   jsr setsquarexy
-  jsr drawrect
+  jsr fillrect
 
   rts
 
 ;;; set parameters for a square. on entry, A and Y are the X and Y coordinates
-;;; div 8 for the 
+;;; div 8 for the top left.
 setsquarexy
   ;; first, cache the values
   sta SCRATCH
@@ -1756,20 +1756,16 @@ setsquarexy
 
   lda #$95
   ldy SCRATCH
-;  ldy #60
   jsr writereg
   lda #$96
   ldy SCRATCH+1
-;  ldy #0
   jsr writereg
 
   lda #$97
   ldy SCRATCH+2
-;  ldy #60
   jsr writereg
   lda #$98          
   ldy SCRATCH+3
-;  ldy #0
   jsr writereg
   rts
 
@@ -1919,7 +1915,7 @@ colors
 ;;;
 
 ;;;
-;;; Ouptut carriage return and line feed
+;;; Ouptut carriage return and line feed to serial port
 ;;;
 crlf
   pha
@@ -1944,7 +1940,7 @@ wait_txd_empty
 
 
 ;;;
-;;; output the character code in the accumulator
+;;; output the character code in the accumulator to the serial port
 ;;;
 puta
 .(
@@ -1959,7 +1955,7 @@ wait_txd_empty
   rts
 
 ;;;
-;;; get a character code, left in the accumulator
+;;; get a character code via serial port, left in the accumulator
 ;;;
 geta
 .(
@@ -1972,7 +1968,7 @@ wait_rxd_empty
   rts
 
 ;;;
-;;; output the value in the accumulator as a hex pattern
+;;; output the value in the accumulator as a hex pattern to serial port
 ;;; NB x cannot be guaranteed to be stack ptr during this... check...
 ;;;
 putax
@@ -2012,7 +2008,7 @@ wait_txd_empty2
   rts
 
 
-;;; read a line of input from the serial interface
+;;; read a line of input from the serial port
 ;;; leaves data in the buffer at INPUT
 ;;; y is the number of characters in the line, so it will fail if
 ;;; more then 255 characters are entered
@@ -2050,7 +2046,6 @@ done
 
 
 
-
 ;;; print the string pointed to at PRINTVEC
 ;;;
 printvecstr
@@ -2071,6 +2066,10 @@ endstr
   rts
 
 
+;;; print immediate -- hack the stack to find the string to print
+;;; right after the JSR instruction, and when complete, jump over the
+;;; string to resume execution.
+;;;
 DPL     =   $fd
 DPH     =   $fe
 primm:
