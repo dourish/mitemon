@@ -195,13 +195,9 @@ table28
   .byte "bg", 0
   .word dobg
 table29
-  .word table30
+  .word $0000       ; signals last entry
   .byte "cls", 0
   .word docls
-table30
-  .word $0000            ; signals last entry in the table
-  .byte "colors", $00
-  .word docolors
 
 
 ;;;
@@ -1807,9 +1803,6 @@ setsquarexy
   jsr writereg
   rts
 
-docolors
-  rts
-
 light .byte 0
 
 dolight
@@ -1946,6 +1939,8 @@ colors
   .byte $1F, $00, $1F    ; magenta
   .byte $1F, $3F, $00    ; yellow
   .byte $1F, $3F, $1F    ; white
+  .byte $0F, $1F, $0F    ; grey
+  .byte $1D, $18, $15    ; pink?
 
 
 ;;;
