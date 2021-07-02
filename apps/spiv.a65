@@ -42,16 +42,6 @@ UVIA_DDRA  = $8013
 SPI_PORT   = UVIA_PORTB
 
 
-;; colors
-C_BLACK=$0000
-C_BLUE=$001F 
-C_RED=$F800  
-C_GREEN=$07E0
-C_CYAN=$07FF 
-C_MAGENTA=$F81F
-C_YELLOW=$FFE0 
-C_WHITE=$FFFF  
-
 ;; Command/Data codes for SPI
 DATAWRITE=$00
 DATAREAD=$40 
@@ -245,20 +235,6 @@ setup6522
   sta UVIA_DDRB
   lda #SPI_MOSI|RESET|SPI_CS
   sta SPI_PORT
-  rts
-
-
-gettoken
-  ; listen until we hear %11111110 (254/$FE)
-  jsr recv8bits
-  cmp #$FE
-  bne gettoken
-  rts
-
-
-sendtoken
-  lda #254
-  jsr sendbyte
   rts
 
 
@@ -618,13 +594,7 @@ vidinit
   jsr wrcommand
   jsr rddata
   cmp #$75
-  bne fail
-  lda #<successstr
-  sta PRINTVEC
-  lda #>successstr
-  sta PRINTVEC+1
-  jsr printvecstr
-  bra endvidinit
+  beq endvidinit
 fail
   jsr putax
   lda #<failstr
@@ -918,7 +888,7 @@ dopwmq
 
 ;;; set text colors (actually, either mode) -- fg white, bg black
 ;;;
-setcolors
+defaultcolors
 
   ;; set foreground to white
   jsr awaitfree
@@ -1613,7 +1583,7 @@ dotext
   and #%0101111     ; clear bits 7 and 5
   jsr wrdata
 
-  jsr setcolors
+  jsr defaultcolors
 
   jsr primm
   .byte "text mode set", $0a, $0d, $00
