@@ -169,7 +169,7 @@ table21
 table22
   .word table23
   .byte "nl", 0
-  .word donl
+  .word donewline
 table23
   .word table24
   .byte "color?", 0
@@ -492,71 +492,85 @@ awaitfree
 wrcommand
   pha               ; cache value
 
-  lda #SPI_CS       ; set CS to low
-  trb SPI_PORT
+;  lda #SPI_CS       ; set CS to low
+;  trb SPI_PORT
+  lda #RESET        ; everything low except RESET
+  sta SPI_PORT
 
   lda #CMDWRITE     ; send CMDWRITE
   jsr sendbyte
   pla               ; retreive value
   jsr sendbyte      ; send it
 
-  lda #SPI_MOSI     ; set MOSI high
-  tsb SPI_PORT
+;  lda #SPI_MOSI     ; set MOSI high
+;  tsb SPI_PORT
 
-  lda #SPI_CS       ; set CS high
-  tsb SPI_PORT
+;  lda #SPI_CS       ; set CS high
+;  tsb SPI_PORT
+  lda #SPI_MOSI|SPI_CS|RESET
+  sta SPI_PORT
   rts
 
-rdcommand
-  lda #SPI_CS       ; set CS low
-  trb SPI_PORT
-
-  ;; send CMDREAD
-  lda #CMDREAD      ; send CMDREAD
-  jsr getresponse   ; receive data into A
-
-  pha               ; cache it temporarily
-  lda #SPI_CS       ; set CS high
-  tsb SPI_PORT
-  pla               ; retrieve data
-  rts
+;rdcommand
+;  lda #SPI_CS       ; set CS low
+;  trb SPI_PORT
+;
+;  ;; send CMDREAD
+;  lda #CMDREAD      ; send CMDREAD
+;  jsr sendbyte
+;  jsr getresponse   ; receive data into A
+;
+;  pha               ; cache it temporarily
+;  lda #SPI_CS       ; set CS high
+;  tsb SPI_PORT
+;  pla               ; retrieve data
+;  rts
 
 wrdata
   pha
-  ;; set CS low
-  lda #SPI_CS
-  trb SPI_PORT
+;  ;; set CS low
+;  lda #SPI_CS
+;  trb SPI_PORT
+  lda #RESET        ; everything low except RESET
   ;; send DATAWRITE
   lda #DATAWRITE
   jsr sendbyte
   pla
   ;; send A
   jsr sendbyte
-  ;; set MOSI high
-  lda #SPI_MOSI
-  tsb SPI_PORT
-  ;; set CS high
-  lda #SPI_CS
-  tsb SPI_PORT
+;  ;; set MOSI high
+;  lda #SPI_MOSI
+;  tsb SPI_PORT
+;  ;; set CS high
+;  lda #SPI_CS
+;  tsb SPI_PORT
+  lda #SPI_MOSI|SPI_CS|RESET   ; CS, MOSI, RESET high
+  sta SPI_PORT
   rts
 
 rddata
-  lda #SPI_CS       ; set CS low
-  trb SPI_PORT
+;  lda #SPI_CS       ; set CS low
+;  trb SPI_PORT
+  lda #RESET
+  sta SPI_PORT      ; RESET high, everything else low
 
   lda #DATAREAD     ; send DATAREAD
   jsr sendbyte
 
-  lda #SPI_MOSI     ; keep MOSI low while awaiting response
-  trb SPI_PORT
+;  lda #SPI_MOSI     ; keep MOSI low while awaiting response
+;  trb SPI_PORT
+  lda #RESET
+  sta SPI_PORT      ; RESET high, everything else low
 
   jsr recv8bits     ; get response into A
   pha               ; cache it for a moment
 
-  lda #SPI_MOSI     ; set MOSI high
-  tsb SPI_PORT
-  lda #SPI_CS       ; set CS high
-  tsb SPI_PORT
+;  lda #SPI_MOSI     ; set MOSI high
+;  tsb SPI_PORT
+;  lda #SPI_CS       ; set CS high
+;  tsb SPI_PORT
+  lda #SPI_MOSI|SPI_CS|RESET
+  sta SPI_PORT
 
   pla               ; retreive data
   rts
@@ -1352,6 +1366,19 @@ fillscreen
   jsr wrdata
   rts
 
+;;; draw a rectangle, presuming that it's already all set up
+drawrect
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+  jsr delay100ms
+  rts
+
 
 dowhite
   jsr primm
@@ -1508,14 +1535,18 @@ dopos
   rts
 
 ;;; move to the start of a new line. set horizontal position to zero, and
-;;; increment vertical position by 16.
-donl
+;;; increment vertical position by 16. (NOTE: this presumes that we're
+;;; at text size 0.)
+;;;
+donewline
+  ;; first, do the equivalent of a carriage return
   ldy #0            ; set $2a and $2b, horizontal position, to 0
   lda #$2b
   jsr writereg
   lda #$2a
   jsr writereg
 
+  ;; second, do the equivalent of a line feed
   lda #$2d          ; read MSB of vertical position
   jsr readreg
   tay               ; cache it in Y
@@ -1664,6 +1695,116 @@ hellostr .byte "Hello hello hello from the Mite/RA8875 ", $00
 hdonestr .byte "written", 10, 13, $0
 
 dosquares
+
+  ;; one white square
+  lda #7
+  jsr setfg
+  
+  lda #20
+  ldy #20
+  jsr setsquarexy
+  jsr drawrect
+
+  ;; one red square
+  lda #1
+  jsr setfg
+  
+  lda #30
+  ldy #20
+  jsr setsquarexy
+  jsr drawrect
+
+  ;; one cyan square
+  lda #4
+  jsr setfg
+  
+  lda #40
+  ldy #20
+  jsr setsquarexy
+  jsr drawrect
+
+  ;; one yellow square
+  lda #6
+  jsr setfg
+  
+  lda #50
+  ldy #20
+  jsr setsquarexy
+  jsr drawrect
+
+  rts
+
+;;; set parameters for a square. on entry, A and Y are the X and Y coordinates
+;;; div 8 for the 
+setsquarexy
+  ;; first, cache the values
+  sta SCRATCH
+  stz SCRATCH+1
+  sty SCRATCH+2
+  stz SCRATCH+3
+
+  ;; now shift both left three places
+  asl SCRATCH
+  rol SCRATCH+1
+  asl SCRATCH
+  rol SCRATCH+1
+  asl SCRATCH
+  rol SCRATCH+1
+
+  asl SCRATCH+2
+  rol SCRATCH+3
+  asl SCRATCH+2
+  rol SCRATCH+3
+  asl SCRATCH+2
+  rol SCRATCH+3
+
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy SCRATCH
+  jsr writereg
+  ldy SCRATCH+1
+  lda #$92
+  jsr writereg
+  ldy SCRATCH+2
+  lda #$93
+  jsr writereg
+  ldy SCRATCH+3
+  lda #$94
+  jsr writereg
+
+  ;; add 60 to each value, for the end points
+  clc
+  lda SCRATCH
+  adc #40
+  sta SCRATCH
+  lda SCRATCH+1
+  adc #0
+  sta SCRATCH+1
+
+  lda SCRATCH+2
+  adc #40
+  sta SCRATCH+2
+  lda SCRATCH+3
+  adc #0
+  sta SCRATCH+3
+
+  lda #$95
+  ldy SCRATCH
+;  ldy #60
+  jsr writereg
+  lda #$96
+  ldy SCRATCH+1
+;  ldy #0
+  jsr writereg
+
+  lda #$97
+  ldy SCRATCH+2
+;  ldy #60
+  jsr writereg
+  lda #$98          
+  ldy SCRATCH+3
+;  ldy #0
+  jsr writereg
   rts
 
 docolors
