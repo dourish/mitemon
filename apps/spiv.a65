@@ -185,6 +185,14 @@ table28
   .byte "bg", 0
   .word dobg
 table29
+  .word table30
+  .byte "setscroll", 0
+  .word dosetscroll
+table30
+  .word table31
+  .byte "scroll", 0
+  .word doscroll
+table31
   .word $0000       ; signals last entry
   .byte "cls", 0
   .word docls
@@ -1531,8 +1539,68 @@ donewline
   jsr writereg
   rts
 
+
+;;; test the scrolling window mechanism
+;;;
+dosetscroll
+  jsr primm
+  .byte "setting up scroll window", $0a, $0d, $0
   
-  
+  ;; set up parameters -- startx, starty, endx, endy
+  ;; the scroll window should be the entire display, so 0,0 - 799,479
+  lda #$38
+  ldy #0
+  jsr writereg
+  ldy #0
+  lda #$39
+  jsr writereg
+  ldy #0
+  lda #$3a
+  jsr writereg
+  ldy #0
+  lda #$3b
+  jsr writereg
+
+  lda #$3c
+  ldy #$1F          ; lower byte for 799
+  jsr writereg
+  lda #$3d
+  ldy #03           ; upper byte for 799
+  jsr writereg
+
+  lda #$3e
+  ldy #$df          ; lower byte for 479
+  jsr writereg
+  lda #$3e          
+  ldy #$01          ; upper byte for 479
+  jsr writereg
+  rts
+
+doscroll
+  jsr primm
+  .byte "scrolling window by increments", $0a, $0d, $0
+
+  ldy #0
+  lda #$27
+  jsr writereg
+scrollloop
+  lda #".
+  jsr puta
+  lda #$26
+  jsr writereg
+  phy
+  jsr delay100ms
+  ply
+  tya
+  clc
+  adc #16
+  beq endscroll
+  tay
+  bra scrollloop
+endscroll
+  jsr crlf
+  rts
+
 
 ;;; clear screen
 ;;;
@@ -2102,6 +2170,6 @@ primm4:
 hextable:	 .byte "0123456789ABCDEF"
 greeting:	 .byte "SPI Video test", $0d, $0a, $00
 prompt:		 .byte "-"
-helpstring:	 .byte "Commands: help, init, vinit, reginit, display, pwm, pwm?, color?, white, blue, red, 20reg, reg88, "
-		 .byte "text, pos, graph, echo, squares, light, cursor, colors, hello, size, font, cls, quit", $0d, $0a, $00
+helpstring:	 .byte "Commands: help, init, vinit, reginit, display, pwm?, color?, white, blue, red, 20reg, reg88, text, "
+		 .byte "pos, graph, echo, squares, light, cursor, colors, hello, size, font, cls, scroll, quit", $0d, $0a, $00
 nocmderrstr:	 .byte "Command not recognized", $0d, $0a, $00
