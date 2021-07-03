@@ -154,8 +154,8 @@ table20
   .word dofinish
 table21
   .word table22
-  .byte "20reg", 0
-  .word do20reg
+  .byte "input", 0
+  .word doinput
 table22
   .word table23
   .byte "nl", 0
@@ -2443,6 +2443,44 @@ busyloop
   rts
 
 
+;;; continually take input from the keyboard and output it on the
+;;; screen. doesn't echo newline, but keeps track of how many
+;;; lines we have entered so that it knows when to scroll.
+doinput
+  jsr primm
+  .byte "Enter text, ctrl-X to exit", $0a, $0d, $0
+
+  stz SCRATCH       ; maintain line count
+startinput
+  lda #MRWC
+  jsr wrcommand
+
+inputloop
+  jsr geta
+  cmp #24    ; ^x
+  beq endinput
+  cmp #$0d
+  beq endofline
+
+  jsr wrdata
+  bra inputloop
+
+endofline
+  inc SCRATCH
+  lda SCRATCH
+  cmp #30           ; end of screen
+  beq endofscreen
+  jsr donewline
+  bra startinput
+
+endofscreen
+  jsr doscrollup
+  lda #20
+  sta SCRATCH
+  bra startinput
+
+endinput
+  rts
 
 
 ;;; Set text size (range 0-3)
