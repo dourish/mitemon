@@ -98,8 +98,8 @@ table6
   .word doquit
 table7
   .word table8
-  .byte "light", $00
-  .word dolight
+  .byte "move", $00
+  .word domove
 table8
   .word table9
   .byte "hello", $00
@@ -130,8 +130,8 @@ table14
   .word doblue
 table15
   .word table16
-  .byte "reg88", 0
-  .word doreg88
+  .byte "unsetscroll", 0
+  .word dounsetscroll
 table16
   .word table17
   .byte "reginit", 0
@@ -146,12 +146,12 @@ table18
   .word doreg0
 table19
   .word table20
-  .byte "on", 0
-  .word doon
+  .byte "scrollup", 0
+  .word doscrollup
 table20
   .word table21
-  .byte "off", 0
-  .word dooff
+  .byte "finish", 0
+  .word dofinish
 table21
   .word table22
   .byte "20reg", 0
@@ -197,6 +197,14 @@ table31
   .byte "fill", 0
   .word dofill
 table32
+  .word table33
+  .byte "reg8", 0
+  .word doreg8
+table33
+  .word table34
+  .byte "reg!", 0
+  .word doregset
+table34
   .word $0000       ; signals last entry
   .byte "cls", 0
   .word docls
@@ -779,13 +787,6 @@ reginit
 
   rts
 
-doreg88
-  lda #88
-  jsr wrcommand
-  jsr rddata
-  jsr putax
-  jsr crlf
-  rts
 
 do20reg
   ldy #0
@@ -955,6 +956,7 @@ start
   jsr dohelp        ; print the commands
   jsr doinit        ; initialize the video board
   jsr dotext        ; set text mode
+  jsr docursor      ; turn on cursor
 
 
 ;;;
@@ -1119,17 +1121,6 @@ printerror
 ;;; SECTION 5: Implement interpreter commands
 ;;;
 ;;;
-
-;;; Print the help text
-;;;
-;dohelp
-;  lda #<helpstring
-;  sta PRINTVEC
-;  lda #>helpstring
-;  sta PRINTVEC+1
-;  jsr printvecstr
-;  rts
-
 
 ;;; Print help information. The old version of this used to just
 ;;; print a string; for easier reuse, this version walks the command
@@ -1625,8 +1616,36 @@ dosetscroll
   lda #$3e
   ldy #$df          ; lower byte for 479
   jsr writereg
-  lda #$3e          
+  lda #$3f
   ldy #$01          ; upper byte for 479
+  jsr writereg
+  rts
+
+;;; test the scrolling window mechanism
+;;;
+dounsetscroll
+  jsr primm
+  .byte "setting scroll window to zero", $0a, $0d, $0
+  
+  ;; set up parameters -- startx, starty, endx, endy
+  ;; the scroll window should be the entire display, so 0,0 - 799,479
+  ldy #0
+  lda #$38
+  jsr writereg
+  lda #$39
+  jsr writereg
+  lda #$3a
+  jsr writereg
+  lda #$3b
+  jsr writereg
+
+  lda #$3c
+  jsr writereg
+  lda #$3d
+  jsr writereg
+  lda #$3e
+  jsr writereg
+  lda #$3f
   jsr writereg
   rts
 
@@ -1807,7 +1826,6 @@ dofill
   
 
 
-
 dograph
   lda #MWCR0
   jsr wrcommand
@@ -1830,19 +1848,16 @@ strloop
   iny
   bra strloop
 endstr
-  lda #<hdonestr
-  sta PRINTVEC
-  lda #>hdonestr
-  sta PRINTVEC+1
-  jsr printvecstr
   rts
 .)
 
 hellostr .byte "Hello hello hello from the Mite/RA8875 ", $00
-hdonestr .byte "written", 10, 13, $0
 
+
+;;; add squares to the display. oddly, we can do this while we're in
+;;; text mode, suggesting that I don't really get yet what the deal is
+;;; with text mode vs graphics mode.
 dosquares
-
   ;; one white square
   lda #7
   jsr setfg
@@ -1966,6 +1981,470 @@ lightoff
   rts
 
 
+
+;;; display a block of eight registers, starting from a base address
+;;; specified on the command line (two hex digits).
+doreg8
+
+  ;; get the first parameter, if present
+.(
+  ldy #1
+  cpy ARGINDEX
+  bne continue
+  jsr primm
+  .byte "base address?", $0d, $0a, 0
+  bra endreg8
+continue
+.)
+  lda #1
+  jsr readhexarg
+
+  sta SCRATCH
+
+  ldy #4
+firstloop
+  phy
+  lda SCRATCH
+  jsr putax
+  lda #":
+  jsr puta
+  lda #32
+  jsr puta
+  lda SCRATCH
+  jsr readreg
+  jsr putax
+  lda #32
+  jsr puta
+  jsr puta
+  inc SCRATCH
+  ply
+  dey
+  bne firstloop
+
+  jsr crlf
+
+  ldy #4
+secondloop
+  phy
+  lda SCRATCH
+  jsr putax
+  lda #":
+  jsr puta
+  lda #32
+  jsr puta
+  lda SCRATCH
+  jsr readreg
+  jsr putax
+  lda #32
+  jsr puta
+  jsr puta
+  inc SCRATCH
+  ply
+  dey
+  bne secondloop
+
+  jsr crlf
+  
+endreg8
+  rts
+
+doregset
+  ;; check paramters
+.(
+  ldy #2
+  cpy ARGINDEX
+  bne continue
+  jsr primm
+  .byte "address and value?", $0d, $0a, 0
+  bra endreg8
+continue
+.)
+  lda #1
+  jsr readhexarg
+  sta SCRATCH
+
+  lda #2
+  jsr readhexarg
+  sta SCRATCH+1
+
+  tay
+  pla
+  jsr writereg
+
+  lda SCRATCH
+  jsr putax
+  lda #":
+  jsr puta
+  lda #32
+  jsr puta
+  lda SCRATCH+1
+  jsr putax
+  jsr crlf
+  rts
+
+;;; read a parameter (indicated by A) as a hex value (single byte)
+;;; and return in A. Used by reg8 and regset.
+readhexarg
+  phx
+  tay
+  iny
+  ldx ARGINDEX,y
+
+  ;; load and process first digit. We're using SCRATCH+4 to assemble
+  ;; the result
+  lda INPUT,x
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  bra donefirst
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  bra donefirst
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+donefirst
+  asl
+  asl
+  asl
+  asl
+  sta SCRATCH+4          ; assembling result here
+.)
+
+  ;; load and process second digit
+  inx
+  lda INPUT,x
+.(
+  cmp #$60
+  bcc upper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  jmp donesecond
+upper
+  cmp #$40
+  bcc number
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  jmp donesecond
+number
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+donesecond
+  clc
+  adc SCRATCH+4
+  sta SCRATCH+4     ; not needed I think?
+.)
+  
+  plx
+  rts
+
+
+;;; Do a test text block move using bitblt functions. I think this
+;;; is what I want to use to implement scrolling, so let's do something
+;;; along those lines. Move roughly the bottom two third of the screen
+;;; to the top of the screen, sticking to line-aligned units. There are
+;;; 30 16-bit lines on a 480-line display, so basically I want to move
+;;; (0,160)-(799,470) to (0,0)-(799,320).
+;;;
+domove
+  ;; set up source address
+  ;; NOTE address includes layer specification. I'm setting this
+  ;; to zero, which means Layer 1. I'm not even sure right now which
+  ;; layer I'm using!
+  ldy #0            ; starting at 0, 160
+  lda #$54          ; LSB of X coordinate
+  jsr writereg
+  lda #$55          ; MSB of X coordinate
+  jsr writereg
+  ldy #$A0          
+  lda #$56          ; LSB of Y coordinate
+  jsr writereg
+  ldy #0
+  lda #$57          ; MSB of Y coordinate
+  
+
+  ;; set up destination address
+  ldy #0            ; copying to 0,0
+  lda #$58          ; LSB of X coordinate
+  jsr writereg
+  lda #$59          ; MSB of X coordinate
+  jsr writereg
+  lda #$5A          ; LSB of Y coordinate
+  jsr writereg
+  lda #$5B          ; MSB of Y coordinate
+
+  ;; set BTE width and hight
+  ldy #$20          ; width is 800 ($320)
+  lda #$5C          ; LSB of width
+  jsr writereg
+  ldy #$03
+  lda #$5D          ; MSD of width
+  jsr writereg
+
+
+  ldy #$40          ; height is 340 ($140)
+  lda #$5E          ; LSB of X coordinate
+  jsr writereg
+  ldy #$01
+  lda #$5F          ; MSD of X coordinate
+  jsr writereg
+
+  ;; set BTE function
+  ;; function is "move in a positive direction". The "positive direction"
+  ;; means that we start at the beginning and move toward the end; since
+  ;; the source and destination regions overlap, that's what we need.
+  ;; ROP is "destionation = source" (ie, straight copy).
+  ;; ROP is %1100 = $C, ROP is %0010 = $02
+  ;; result is $C2
+  ldy #$C2
+  lda #$51
+  jsr writereg
+
+  ;; enable BTE function
+  ldy #$80
+  lda #$50
+  jsr writereg
+
+
+  ;; we really need to wait to determine when the operation has
+  ;; has completed. For the moment, ignore this since I'm using a
+  ;; CLI. BUG BUG BUG.
+
+  rts
+
+dofinish
+
+  lda #$63
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  lda #$64
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  lda #$65
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  ;; now set color to black, ready for painting the block
+  ldy #0
+  lda #$63
+  jsr writereg
+  lda #$64
+  jsr writereg
+  lda #$65
+  jsr writereg
+
+  ;; now stage two -- empty bottom third of the screen. region is
+  ;; from ($0, $140) to ($31F, $11F)
+
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy #0
+  jsr writereg
+  ldy #0
+  lda #$92
+  jsr writereg
+  ldy #$40
+  lda #$93
+  jsr writereg
+  ldy #1
+  lda #$94
+  jsr writereg
+
+  lda #$95
+  ldy #$1F          ; lower byte for 799
+  jsr writereg
+  lda #$96
+  ldy #03           ; upper byte for 799
+  jsr writereg
+
+  lda #$97
+  ldy #$df          ; lower byte for 479
+  jsr writereg
+  lda #$98          
+  ldy #$01          ; upper byte for 479
+  jsr writereg
+
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+  ;; add a pause to complete
+  jsr delay100ms
+
+  ;; reset color
+  pla
+  tay
+  lda #$65
+  jsr writereg
+  pla
+  tay
+  lda #$64
+  jsr writereg
+  pla
+  tay
+  lda #$63
+  jsr writereg
+
+  ;; move text cursor
+  ldy #0            ; set $2a and $2b, horizontal position, to 0
+  lda #$2a
+  jsr writereg
+  lda #$2b
+  jsr writereg
+  ldy #$40
+  lda #$2c
+  jsr writereg
+  ldy #1
+  lda #$2d
+  jsr writereg
+
+  rts
+
+
+
+;;; scrollup is basically the text scrolling function that i need
+;;; for "terminal" type interaction. Four steps -- first, some setup
+;;; that I do here so that the block transfer and then erase happen
+;;; as quickly together as possible. Then, do the block transfer to
+;;; move the bottom two thirds of the screen to the top. Next, paint
+;;; a black background in the bottom third. Finally, reset the color
+;;; and move the text position to the newly opened area.
+
+doscrollup
+  ;; set up for move. I do this out of line so that the actual transfer
+  ;; happens as quickly as it can. Look up the current foreground
+  ;; color, cache it on the stack, and set the foreground to black.
+  ;; look up current color values and save them
+  lda #$63
+  jsr readreg
+  pha
+
+  lda #$64
+  jsr readreg
+  pha
+
+  lda #$65
+  jsr readreg
+  pha
+
+  ;; now set color to black, ready for painting the block after the move
+  ldy #0
+  lda #$63
+  jsr writereg
+  lda #$64
+  jsr writereg
+  lda #$65
+  jsr writereg
+
+  ;; setup completed. next, do the block move.
+  jsr domove        ; this is where the block transfer happens
+
+  ;; wait for block transfer to complete. Read register $50 until
+  ;; the top bit is clear.
+.(
+busyloop
+  lda #$50
+  jsr readreg
+  bmi busyloop
+.)
+
+  ;; now, empty bottom third of the screen. region is from
+  ;; ($0, $140) to ($31F, $11F)
+
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy #0
+  jsr writereg
+  ldy #0
+  lda #$92
+  jsr writereg
+  ldy #$40
+  lda #$93
+  jsr writereg
+  ldy #1
+  lda #$94
+  jsr writereg
+
+  lda #$95
+  ldy #$1F          ; lower byte for 799
+  jsr writereg
+  lda #$96
+  ldy #03           ; upper byte for 799
+  jsr writereg
+
+  lda #$97
+  ldy #$df          ; lower byte for 479
+  jsr writereg
+  lda #$98          
+  ldy #$01          ; upper byte for 479
+  jsr writereg
+
+  ;; do the block draw
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+  ;; add a pause to complete
+  jsr delay100ms
+
+  ;; reset color. I should check if there's a way to draw a
+  ;; rectangle using the current *background* color 'cos that
+  ;; would be a lot easier!
+  pla
+  tay
+  lda #$65
+  jsr writereg
+  pla
+  tay
+  lda #$64
+  jsr writereg
+  pla
+  tay
+  lda #$63
+  jsr writereg
+
+  ;; move text cursor
+  ldy #0            ; set $2a and $2b, horizontal position, to 0
+  lda #$2a
+  jsr writereg
+  lda #$2b
+  jsr writereg
+  ldy #$40
+  lda #$2c
+  jsr writereg
+  ldy #1
+  lda #$2d
+  jsr writereg
+
+  rts
+
+
+
+
 ;;; Set text size (range 0-3)
 ;;;
 dosize
@@ -2027,6 +2506,7 @@ fontloop
   bra fontloop
 endfont
   rts
+
 
 ;;; set foreground color
 dofg
@@ -2281,8 +2761,5 @@ primm4:
 ;;;
 
 hextable:	 .byte "0123456789ABCDEF"
-greeting:	 .byte "SPI Video test", $0d, $0a, $00
 prompt:		 .byte "-"
-helpstring:	 .byte "Commands: help, init, vinit, reginit, display, pwm?, color?, white, blue, red, 20reg, reg88, text, "
-		 .byte "pos, graph, echo, squares, light, cursor, colors, hello, size, font, cls, scroll, quit", $0d, $0a, $00
 nocmderrstr:	 .byte "Command not recognized", $0d, $0a, $00
