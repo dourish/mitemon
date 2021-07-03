@@ -193,6 +193,10 @@ table30
   .byte "scroll", 0
   .word doscroll
 table31
+  .word table32
+  .byte "fill", 0
+  .word dofill
+table32
   .word $0000       ; signals last entry
   .byte "cls", 0
   .word docls
@@ -1118,13 +1122,63 @@ printerror
 
 ;;; Print the help text
 ;;;
+;dohelp
+;  lda #<helpstring
+;  sta PRINTVEC
+;  lda #>helpstring
+;  sta PRINTVEC+1
+;  jsr printvecstr
+;  rts
+
+
+;;; Print help information. The old version of this used to just
+;;; print a string; for easier reuse, this version walks the command
+;;; table and prints out each entry.
 dohelp
-  lda #<helpstring
+.(
+  jsr primm
+  .byte "Commands: ", 0
+
+  lda #<table       ; start at beginning of table
+  sta SCRATCH       ; SCRATCH and SCRATCH+1 are table pointer
+  lda #>table
+  sta SCRATCH+1
+
+nextcmd
+  ldy #1            ; grab a copy of pointer to next entry
+  lda (SCRATCH)     ; and cache it in SCRATCH+2/3
+  sta SCRATCH+2
+  lda (SCRATCH),y
+  sta SCRATCH+3
+
+  clc               ; set PRINTVEC to the name entry in the table
+  lda SCRATCH       ; two bytes after start of entry
+  adc #2
   sta PRINTVEC
-  lda #>helpstring
+  lda SCRATCH+1
+  adc #0
   sta PRINTVEC+1
-  jsr printvecstr
+  jsr printvecstr   ; print command name
+
+  lda SCRATCH+2     ; check if this is the end of the table
+  ora SCRATCH+3     ; signalled by zero as pointer to next entry
+  beq endhelp
+
+  lda #$2c          ; otherwise, there's another entry so print comma
+  jsr puta          ; and space
+  lda #32
+  jsr puta
+
+  lda SCRATCH+2     ; move pointer to next table entry
+  sta SCRATCH
+  lda SCRATCH+3
+  sta SCRATCH+1
+  bra nextcmd       ; loop
+
+endhelp
+  jsr crlf
   rts
+.)
 
 
 ;;; Echo text from command line to display
@@ -1584,16 +1638,23 @@ doscroll
   lda #$27
   jsr writereg
 scrollloop
-  lda #".
+  tya
+  jsr putax
+  tay
+  lda #32
   jsr puta
   lda #$26
   jsr writereg
   phy
+  ldy #0
+  lda #$27
+  jsr writereg      ; do i need to write both registers?
   jsr delay100ms
   ply
   tya
   clc
   adc #16
+  tay
   beq endscroll
   tay
   bra scrollloop
@@ -1693,6 +1754,58 @@ docursor
   jsr primm
   .byte "cursor enabled", $0a, $0d, $0
   rts
+
+
+;;; add a load of text to the screen, for testing purposes
+dofill
+  jsr dofont
+  jsr donewline
+  lda #4
+  jsr setfg
+  jsr dofont
+  jsr donewline
+  lda #6
+  jsr setfg
+  jsr dofont
+  jsr donewline
+  lda #8
+  jsr setfg
+  jsr dofont
+  jsr donewline
+
+  lda #7
+  jsr setfg
+  jsr donewline
+  jsr donewline
+  jsr donewline
+  jsr dohello
+  jsr dohello
+  jsr donewline
+  jsr dohello
+  jsr donewline
+  jsr donewline
+  jsr donewline
+  jsr donewline
+  jsr donewline
+  jsr donewline
+
+  jsr dofont
+  jsr dofont
+  jsr dofont
+  jsr dofont
+  jsr dofont
+  jsr donewline
+
+  jsr donewline
+  jsr dofont
+  jsr dofont
+  jsr dofont
+  jsr donewline
+
+  jsr dosquares
+  rts
+  
+
 
 
 dograph
