@@ -1,0 +1,4084 @@
+;;;
+;;; Standalone text editor. It's based on the editor in SECND but with
+;;; a very different data structure and an expectation of a 80x24 screen.
+;;;
+;;; Like the editor in FORTH, it uses approximately emacs-ish key
+;;; bindings.
+;;;
+;;; Paul Dourish, July 2019
+;;;
+;;; Revised July 2021 to incorporate support for RA8875 video.
+;;;
+
+* = $0300
+
+  jmp start
+
+;;; these variables are imported from the monitor/FORTH
+PRINTVEC=$0042
+INPUT=$7F00
+SCRATCH=$0010
+CURSEC=$0068
+WORD=$7EC0
+LBLOCK=$7C00
+HBLOCK=$7D00
+IOSENTINEL=$7E00
+KILLLINE=$7F80      ; and 7F81
+KILLBUFFER=$7F82    ; upper half of FORTH input buffer
+
+
+;;; Data structures/Rationale
+;;;
+;;; Text data is held in a doubly-linked list of lines. Each is 84 bytes
+;;; long; two bytes of forward pointer, two bytes of backwards pointer,
+;;; and 80 bytes of character data. I use the term "lines" to refer to
+;;; these data structures, and "row" and "column" to refer to screen
+;;; space. The line data structures are allocatd in an area from DATASTART
+;;; to DATAEND. NEXTFREE points to the next available space. FIRSTLINE
+;;; and LASTLINE indicate the first and last lines of the text file.
+;;;
+DATASTART=$4000     ; base of data storage area
+DATAEND=$7C00       ; end of data storage
+
+;;; the $0070 area is used by FORTH but not for anything that might run
+;;; while the editor is running, so is safe to reuse.
+MARKROW=$0040   ; and 0041
+MARKCOL=$0042
+KILLSTART=$0043 ; and 0044
+KILLEND=$0045   ; and 0046
+PRISTINE=$004C
+SAVEX=$004D
+FIRSTLINE=$004E ; and 004F
+NEXTFREE=$0070  ; and 0071 -- address of next available line structure
+LASTLINE=$0072  ; and 0073 -- address of ending line structure for text
+CURLINE=$0074   ; and 0075 
+CURDATA=$0076   ; and 0077
+BUFPTR=$0078    ; and 0079
+DATAPTR=$007A   ; and 007B
+row=$007C
+col=$007D
+lower=$007E    ; and 007F
+
+temp=SCRATCH+15
+
+CLUSTER     .word 0
+FILELEN     .word 0
+            .word 0
+SECTOR      .word 0
+            .word 0
+MAXBUF      .byte 0
+MAXDATA     .byte 0
+SCREENSTART .word 0 ; points to line structure for first line on screen
+
+NROWS=24
+MAXROW=NROWS-3
+SCROLLROW=MAXROW
+SENTINELROW=MAXROW+1
+NCOLS=80
+MAXCOL=NCOLS-1
+
+
+#include "../decl.a65"
+#include "../stack.a65"
+#include "jmptable.a65"
+
+table
+  .word tostart     ; a
+  .word back        ; b
+  .word undefined   ; c
+  .word delfwd      ; d
+  .word toend       ; e
+  .word forw        ; f
+  .word undefined   ; g
+  .word delback     ; h
+  .word undefined   ; i
+  .word undefined   ; j
+  .word delline     ; k
+  .word repaint     ; l
+  .word newline     ; m
+  .word nextrow     ; n
+  .word openline    ; o
+  .word prevrow     ; p
+  .word undefined   ; q
+  .word undefined   ; r
+  .word undefined   ; s
+  .word testcode    ; t
+  .word undefined   ; u
+  .word nextpage    ; v
+  .word undefined   ; w
+  .word extended    ; x
+  .word yank        ; y
+  .word undefined   ; z
+
+
+start
+
+  ;;; start off by setting up some key variables
+  lda #<DATASTART
+  sta FIRSTLINE
+  sta NEXTFREE
+  lda #>DATASTART
+  sta FIRSTLINE+1
+  sta NEXTFREE+1
+
+  ;;;
+  ;;; *** FILE READING/PARSING
+  ;;; Loads file data before editor begins
+  ;;;
+
+  ;; First, extract filename the command line, and copy it into
+  ;; WORD as a counted string
+  jsr p1toword
+  bcc checkfile
+
+  ;; otherwise there has been an error which has already been reported,
+  ;; so, quit.
+  rts
+
+checkfile
+  ;; look up the filename in the dictionary.
+  clc
+  jsr ROMFINDDIRW
+  bcc fileready     ; when file already exists
+
+  ;; THIS IS WHERE WE SHOULD CREATE A NEW FILE -- CODE BELOW.
+  ;; BUT FOR THE MOMENT, I AM SKIPPING THAT AND JUMPING STRAIGHT
+  ;; TO THE EDITOR WITH A NEW EMPTY FILE
+
+  jmp emptyfile
+
+
+fileready
+  ;; at this point, the file is set up. the directory sector is in
+  ;; the LBLOCK/HBLOCK area, and the stack has the double-precision
+  ;; sector number and a pointer to the directory entry within it
+  ;; so the cluster number is at ptr + 26,27
+
+  ;; get cluster number and cache it
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+  ldy #26
+  lda (SCRATCH),y
+  sta CLUSTER
+  iny
+  lda (SCRATCH),y
+  sta CLUSTER+1
+
+  ;; get file length and cache it
+  iny
+  lda (SCRATCH),y
+  sta FILELEN
+  iny
+  lda (SCRATCH),y
+  sta FILELEN+1
+  iny
+  lda (SCRATCH),y
+  sta FILELEN+2
+  iny
+  lda (SCRATCH),y
+  sta FILELEN+3
+
+  ;; put cluser number onto the stack as a double
+  inx
+  inx
+  lda CLUSTER
+  sta stackbase+1,x
+  lda CLUSTER+1
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  jsr cltosector    ; turn cluster number into sector number on stack
+
+  ;; cache the sector number
+  lda stackbase+1,x
+  sta SECTOR
+  lda stackbase+2,x
+  sta SECTOR+1
+  lda stackbase+3,x
+  sta SECTOR+2
+  lda stackbase+4,x
+  sta SECTOR+3
+
+  ;; set up variables
+  lda #<DATASTART
+  sta NEXTFREE
+  sta LASTLINE
+  lda #>DATASTART
+  sta NEXTFREE+1
+  sta LASTLINE+1
+
+  lda #<LBLOCK
+  sta BUFPTR
+  lda #>LBLOCK
+  sta BUFPTR+1
+
+  ;; I'm going to start messing with LBLOCK, so clear out the
+  ;; sector cache so as not to confuse myself later.
+  stz CURSEC
+  stz CURSEC+1
+  stz CURSEC+2
+  stz CURSEC+3
+
+
+loadsector
+  ;; load sector data into LBLOCK area
+  dex
+  dex
+  lda #<LBLOCK
+  sta stackbase+1,x
+  lda #>LBLOCK
+  sta stackbase+2,x
+
+  jsr ROMLOADMEM
+
+;  lda #"1
+;  jsr vputa  
+
+loadline
+  ;; open a new line structure and start to load data into it  
+
+  ;; allocate a new line data structure. At the start, LASTLINE is
+  ;; is the current final line (or zero if there is no last line),
+  ;; and NEXTFREE is the line we are allocating.
+  ;;
+  ldy #2            ; set backward pointer from new line to last
+  lda LASTLINE
+  sta (NEXTFREE),y
+  iny
+  lda LASTLINE+1
+  sta (NEXTFREE),y
+
+  ldy #1            ; set forward pointer from last line to new
+  lda NEXTFREE
+  sta (LASTLINE)
+  lda NEXTFREE+1
+  sta (LASTLINE),y
+
+  ldy #1            ; zero out forward pointer for new line
+  lda #0
+  sta (NEXTFREE)
+  sta (NEXTFREE),y
+
+  lda NEXTFREE      ; reset LASTLINE pointer
+  sta LASTLINE
+  lda NEXTFREE+1
+  sta LASTLINE+1
+
+  clc               ; update pointer to next free structure
+  lda NEXTFREE
+  adc #84           ; constant is size of structure
+  sta NEXTFREE
+  lda NEXTFREE+1
+  adc #0
+  sta NEXTFREE+1
+
+  ;; set up CURLINE and CURDATA
+  clc
+  lda LASTLINE
+  sta CURLINE
+  adc #4
+  sta CURDATA
+  lda LASTLINE+1
+  sta CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  lda CURDATA
+  sta DATAPTR
+  lda CURDATA+1
+  sta DATAPTR+1
+
+continueline
+  ;; copy data into new line
+copyline
+  ;; set up MAXDATA to signal end of data
+  stz MAXDATA       ; default, ie no maximum (will be capped at 80)
+  lda FILELEN+1     ; are we down to the last page yet?
+  bne nomax         ; no, so continue
+  lda FILELEN
+  sta MAXDATA       ; yes, so set maximum to remaining data
+nomax
+
+  ;; set up BUFLIMIT to signal end of buffer
+  stz MAXBUF        ; 0 is default (no limit)
+  lda BUFPTR+1
+  cmp #>HBLOCK      ; are we in the upper half of the buffer?
+  bne nolimit       ; no, so no problem
+  sec
+  lda MAXBUF        ; calculate maximum remaining characters
+  sbc BUFPTR        ; BUG CHECK FOR OFF-BY-1 ERROR!
+  sta MAXBUF
+nolimit
+
+  ldy #0
+copydata
+;  lda #"2
+;  jsr vputa
+
+  lda (BUFPTR),y
+;  jsr vputa
+  sta (DATAPTR),y
+  iny
+  cmp #$0A          ; $A = LF = end-of-line marker
+  beq endofline
+  cpy #80           ; BUG this presumes we are not filling an open line
+  beq endofline     ; but for the moment as long as I am dealing with
+  cpy MAXBUF        ; regular text files it should be okay
+  beq endofbuffer
+  cpy MAXDATA
+  bne copydata
+  jmp endofdata
+
+endofline  
+;  lda #"3
+;  jsr vputa
+;  jsr crlf
+
+  ;; update BUFPTR
+  clc
+  tya
+  adc BUFPTR
+  sta BUFPTR
+  lda BUFPTR+1
+  adc #0
+  sta BUFPTR+1
+
+  ;; update FILELEN
+  tya
+  sta SCRATCH
+  sec
+  lda FILELEN
+  sbc SCRATCH
+  sta FILELEN
+  lda FILELEN+1
+  sbc #0
+  sta FILELEN+1
+  lda FILELEN+2
+  sbc #0
+  sta FILELEN+2
+  lda FILELEN+3
+  sbc #0
+  sta FILELEN+3
+
+  lda FILELEN+1
+;  jsr putax
+  lda FILELEN
+;  jsr putax
+;  jsr crlf
+
+  lda FILELEN
+  ora FILELEN+1
+.(
+  bne continue
+  jmp  endofdata
+continue
+.)
+
+  jmp loadline
+
+endofbuffer
+;  lda #"5
+;  jsr vputa
+
+  sty SCRATCH       ; cache Y in SCRATCH, we need it a couple of times
+
+  ;; no more data? (do this test both before and after)
+  lda FILELEN
+  ora FILELEN+1
+  beq endofdata
+
+  ;; update FILELEN
+  sec
+  lda FILELEN
+  sbc SCRATCH
+  sta FILELEN
+  lda FILELEN+1
+  sbc #0
+  sta FILELEN+1
+  lda FILELEN+2
+  sbc #0
+  sta FILELEN+2
+  lda FILELEN+3
+  sbc #0
+  sta FILELEN+3
+
+  ;; no more data?
+  lda FILELEN
+  ora FILELEN+1
+  beq endofdata
+
+  lda FILELEN+3
+  bne endofdata     ; in case we've gone negative
+
+  ;; update DATAPTR with data loaded so far
+  clc
+  lda DATAPTR
+  adc SCRATCH
+  sta DATAPTR
+  lda DATAPTR+1
+  adc #0
+  sta DATAPTR+1
+
+  ;; set up the stack to load a new buffer
+  dex
+  dex
+  dex
+  dex
+  clc
+  lda SECTOR
+  adc #1
+  sta stackbase+1,x
+  sta SECTOR
+  lda SECTOR+1
+  adc #0
+  sta SECTOR+1
+  sta stackbase+2,x
+  lda SECTOR+2
+  adc #0
+  sta SECTOR+2
+  sta stackbase+3,x
+  lda SECTOR+3
+  adc #0
+  sta SECTOR+3
+  sta stackbase+4,x
+
+  dex
+  dex
+  lda #<LBLOCK
+  sta stackbase+1,x
+  sta BUFPTR        ; reset BUFPTR while we're at it
+  lda #>LBLOCK
+  sta stackbase+2,x
+  sta BUFPTR+1
+
+  jsr ROMLOADMEM
+  jmp copyline
+
+endofdata
+;  lda #"6
+;  jsr vputa
+
+finish
+  ;; for debugging, print what we've read
+
+#if 0
+  jsr crlf
+
+  lda FIRSTLINE
+  sta CURLINE
+  lda FIRSTLINE+1
+  sta CURLINE+1
+
+printline
+;  lda CURLINE+1
+;  jsr putax
+;  lda CURLINE
+;  jsr putax
+;  jsr ROMGET
+;  cmp #"q
+;  beq doneprint
+;  jsr crlf
+
+  ldy #4
+printloop
+  lda (CURLINE),y
+  jsr vputa
+  cmp #$0A
+  beq finishline
+  iny
+  cpy #80
+  beq doneline
+  bra printloop
+
+finishline
+  lda #$0D
+  jsr vputa
+doneline
+  ldy #1
+  lda (CURLINE)
+  sta SCRATCH
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  lda SCRATCH
+  ora SCRATCH+1
+  beq doneprint
+
+  lda SCRATCH
+  sta CURLINE
+  lda SCRATCH+1
+  sta CURLINE+1
+
+  bra printline  
+
+doneprint
+#endif
+
+  ;; file loading is complete. start the editor.
+  jmp editstart
+
+
+emptyfile
+  ;; we will enter with just a single line, empty but for
+  ;; the trailing newline.
+  lda NEXTFREE
+  sta CURLINE
+  lda NEXTFREE+1
+  sta CURLINE+1
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+  lda #$0A
+  sta (CURDATA)
+
+  lda CURLINE
+  sta LASTLINE
+  lda CURLINE+1
+  sta LASTLINE+1
+
+  clc
+  lda NEXTFREE
+  adc #84
+  sta NEXTFREE
+  lda NEXTFREE+1
+  adc #0
+  sta NEXTFREE+1
+
+  ;; CURLINE's forward pointer should be 0, and back pointer should
+  ;; point to itself
+  ldy #0
+  lda #0
+  sta (CURLINE),y
+  iny
+  sta (CURLINE),y
+  iny
+  lda CURLINE
+  sta (CURLINE),y
+  iny
+  lda CURLINE+1
+  sta (CURLINE),y
+
+  lda CURLINE
+  sta SCREENSTART
+  lda CURLINE+1
+  sta SCREENSTART+1
+
+
+  jmp warmstart
+
+
+;;;
+;;; *** EDIT CONTROL
+;;;
+
+editstart
+  jsr ra8875init    ; initialize video and clear screen
+
+  lda #<DATASTART   ; set up CURLINE to point to start of data
+  sta CURLINE
+  sta FIRSTLINE
+  sta SCREENSTART
+  lda #>DATASTART
+  sta CURLINE+1
+  sta FIRSTLINE+1
+  sta SCREENSTART+1
+  clc               ; set up CURDATA to point to data for CURLINE
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+warmstart
+  lda #1            ; set the PRISTINE flag. all edit operations
+  sta PRISTINE      ; unset it so that we know file has changed.
+
+  ;jsr cls
+  jsr home
+  stz row
+  stz col
+  stz MARKROW
+  stz MARKROW+1
+  stz MARKCOL
+  stz KILLSTART
+  stz KILLSTART+1
+  stz KILLEND
+  stz KILLEND+1
+  stz KILLLINE
+  stz KILLLINE+1
+
+  stx SAVEX         ; preserve the stack pointer
+  jmp repaint       ; repaint will then jump into editloop below
+
+
+;;; This is the main editor dispatch loop. Fetch a character; if it's
+;;; in the command-code range, then look it up in the table; otherwise,
+;;; insert it. Everything is done with JMPs and every command JMPs back
+;;; to here. Escape is handled with a separate messy routine that should
+;;; really be a second table.
+editloop
+
+  jsr ROMGET
+  cmp #$1B        ; if it's less than 27, it's a control code
+  beq escape      ; exactly 27 is escape
+  bcs notcmd      ; over 27 is not a command
+  dec             ; subtract 1 (to turn it into a 0-ranged value)
+  asl             ; shift to multiply by two
+  tax             ; that's an offset, so put it in X
+  jmp (table,x)
+
+  bra editloop    ; shouldn't need this but included for safety
+
+notcmd
+  jmp insert
+
+escape
+  jsr ROMGETCH
+  cmp #"f"
+  beq escf
+  cmp #"b"
+  beq escb
+  cmp #"v"
+  beq escv
+  cmp #"<
+  beq escless
+  cmp #">
+  beq escgreater
+  cmp #"["
+  beq arrow
+  jmp editloop
+escf
+  jmp fowdword
+escb
+  jmp backword
+escv
+  jmp prevpage
+escless
+  jmp filestart
+escgreater
+  jmp fileend
+arrow
+  jsr ROMGETCH
+  cmp #"A"
+  beq arrowup
+  cmp #"B"
+  beq arrowdown
+  cmp #"C"
+  beq arrowright
+  cmp #"D"
+  beq arrowleft
+  jmp editloop
+arrowup
+  jmp prevrow
+arrowdown
+  jmp nextrow
+arrowright
+  jmp forw
+arrowleft
+  jmp back
+
+;; output the text for one line object, pointed to by lower. 
+;; do the output directly (faster without subroutine call).
+paintrow
+.(
+  phy
+  ldy #4
+rdyloop
+  lda (lower),y
+  beq done
+  cmp #$0A
+  beq done
+  jsr vputa
+  iny
+  cpy #MAXCOL
+  beq done
+  bra rdyloop
+done
+  ply
+  rts
+.)
+
+;;; clear below and print from current row to the bottom of
+;;; of the screen. (uses rowbase to point to line)
+paintdown
+.(
+  lda CURLINE
+  sta lower
+  lda CURLINE+1
+  sta lower+1
+  lda row
+  pha               ; stash the row count
+  lda col
+  pha               ; stash the column count
+  stz col
+paintloop
+  jsr moveto
+  jsr clrtoend
+  jsr paintrow
+  lda row
+  inc
+  cmp #SENTINELROW
+  beq endpaint
+  sta row
+  clc
+
+  ldy #1            ; move to next line in data
+  lda (lower)
+  pha
+  lda (lower),y
+  sta lower+1
+  pla
+  sta lower
+
+  ora lower+1
+  beq endpaint      ; end of data
+
+  bra paintloop
+endpaint
+  pla
+  sta col
+  pla
+  sta row
+  jsr moveto
+  rts
+.)
+
+;;; repaint the whole screen, saving and then restoring cursor position
+;;;
+repaint
+  lda row
+  pha
+  lda col
+  pha
+  lda CURLINE
+  pha
+  lda CURLINE+1
+  pha
+  stz row
+  stz col
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+  jsr cls
+  jsr home
+  jsr paintdown
+  pla
+  sta CURLINE+1
+  pla
+  sta CURLINE
+  pla
+  sta col
+  pla
+  sta row
+  jsr addstatus
+  jsr moveto
+  jmp editloop
+
+
+addstatus
+  lda row
+  pha
+  lda col
+  pha
+  lda #23
+  sta row
+  lda #1
+  sta col
+  jsr moveto
+statusloop
+  lda #"-
+  jsr vputa
+  jsr vputa
+  jsr vputa
+  lda PRISTINE
+  bne step2
+  lda #"*
+  bra step2a
+step2
+  lda #"-
+step2a
+  jsr vputa
+  jsr vputa
+  lda #"-
+  jsr vputa
+  lda #32
+  jsr vputa
+step3
+  ldy #1
+step4
+  lda WORD,y
+  jsr vputa
+  iny
+  cpy WORD
+  bne step4
+step5
+  lda #32
+  jsr vputa
+  lda #"-
+  ldy #5
+step5a
+  jsr vputa
+  dey
+  bne step5a
+step6
+  lda #23
+  sta row
+  lda #65
+  sta col
+  jsr moveto
+step7
+  ldy #14
+  lda #"-
+step7a
+  jsr vputa
+  dey
+  bne step7a
+  lda #$2b  ; +
+  jsr vputa
+  pla
+  sta col
+  pla
+  sta row
+  rts
+
+prtmessage
+.(
+  lda row
+  pha
+  lda col
+  pha
+  lda #24
+  sta row
+  lda #1
+  sta col
+  jsr moveto
+  pla
+  sta col
+  pla
+  sta row
+
+;  lda #$48  ; H
+;  jsr ROMPUTCH
+;  lda #$1B ; ESC    ; ESC-[K clears to end of line
+;  jsr ROMPUTCH
+;  lda #$5B ; [
+;  jsr ROMPUTCH
+;  lda #"K
+
+  phy
+  ldy #0
+loop
+  lda (PRINTVEC),y
+  beq done
+  jsr vputa
+  iny
+  bne loop
+done
+  ply
+  jsr moveto
+  rts
+.)
+
+clrmessage
+  lda #$1B ; ESC
+  jsr ROMPUTCH
+  lda #$5B ; [
+  jsr ROMPUTCH
+  lda #24
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr ROMPUTCH
+  lda #1
+  jsr todecimal
+  lda #$48  ; H
+  jsr ROMPUTCH
+  lda #$1B ; ESC    ; ESC-[K clears to end of line
+  jsr ROMPUTCH
+  lda #$5B ; [
+  jsr ROMPUTCH
+  lda #"K
+  jsr ROMPUTCH
+  jsr moveto
+  rts
+
+
+;;;
+;;; *** EDITOR COMMANDS
+;;;
+
+insert
+  stz PRISTINE
+  pha
+  ldy col
+  lda (CURDATA),y
+  cmp #$0A
+  bne notatend
+inschar
+  pla
+  sta (CURDATA),y
+  jsr ROMPUTCH
+  iny
+  lda #$0A
+  sta (CURDATA),y
+  inc col
+  jsr moveto
+  jmp editloop
+
+notatend
+.(
+  ;; go to the end of the line, and copy everything along one place
+findend
+  iny
+  cpy #80
+  beq endloop
+  lda (CURDATA),y
+  cmp #$0A
+  bne findend
+endloop
+  ;; y points at end-of-line character. move everything along.
+copyloop
+  lda (CURDATA),y   ; copy character at Y forward
+  iny
+  sta (CURDATA),y
+  dey               ; move back down the line
+  dey
+  cpy col           ; stop at the insertion column
+  bne copyloop  
+
+  lda (CURDATA),y   ; copy remaining character at insertion spot
+  iny
+  sta (CURDATA),y
+  dey
+
+  pla               ; now insert new character
+  sta (CURDATA),y
+
+  lda col
+  pha
+  stz col
+  jsr moveto
+  lda CURLINE
+  sta lower
+  lda CURLINE+1
+  sta lower+1
+  jsr paintrow
+  pla
+  inc               ; move forward by one character
+  sta col
+  jsr moveto
+.)
+  jmp editloop
+
+
+tostart
+  stz col
+  jsr moveto
+  jmp editloop
+
+back
+.(
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
+donothing
+ jmp editloop
+.)
+
+undefined
+  ;; ignore any undefined input.
+  jmp editloop
+
+;;; delete character forward. remove character under the cursor unless
+;;; we are at the end of the line
+delfwd
+.(
+  stz PRISTINE
+  ldy col
+  lda (CURDATA),y
+  beq nodelete
+  cmp #$0A
+  beq nodelete
+
+  ;; not at end of line, so go through the line moving everything
+  ;; back
+delloop
+  iny
+  lda (CURDATA),y
+  dey
+  sta (CURDATA),y
+  cmp #0            ; in case DEY reset Z
+  beq done
+  cmp #$0A
+  beq done
+  jsr ROMPUTCH
+  iny
+  bra delloop
+done
+  lda #32           ; space
+  jsr ROMPUTCH
+  jsr moveto        ; restore original cursor position
+nodelete
+  jmp editloop
+.)
+
+;;; move cursor to end of current line
+toend
+.(
+  ldy #$00
+endloop
+  lda (CURDATA),y
+  beq atend         ; we read a newline if there's a null -- BUG?
+  cmp #$0A          ; newline signals end of line
+  beq atend
+  iny
+  cpy #MAXCOL
+  beq atend
+  bra endloop
+atend
+  sty col
+  jsr moveto
+  jmp editloop
+.)
+
+forw
+.(
+  lda col
+  cmp #MAXCOL ; #$3F
+  beq donothing     ; do nothing at the maximum column
+  ldy col
+  lda (CURDATA),y
+  beq donothing     ; read null as end-of-line -- BUG?
+  cmp #$0A
+  beq donothing     ; do nothing at end-of-line
+  inc col
+  jsr moveto
+donothing
+ jmp editloop
+.)
+
+
+;;; delete character backwards
+delback
+.(
+  stz PRISTINE
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
+  jmp delfwd
+donothing
+  jmp editloop
+.)
+
+;;; delete (kill) a line. a regular kill erases all characters
+;;; to the end of the line. a kill on a blank line removes the
+;;; line altogether. some further complications are added by the
+;;; potential need to yank back text later for copy/paste
+delline
+  stz PRISTINE
+  lda (CURDATA)     ; is the line empty?
+  cmp #$0A
+  beq closeline     ; yes, so close it up
+
+.(
+  lda col
+  bne zerobuffer    ; no copy when kill begins mid-line
+
+  ;; we're at the start of the line. Make a copy of the data in case we
+  ;; need to yank it back later.
+  ldy #0
+copyloop
+  lda (CURDATA),y
+  sta KILLBUFFER,y
+  cmp #$0A
+  beq endcopy
+  iny
+  cpy #80
+  bne copyloop
+endcopy
+  lda CURLINE
+  sta KILLLINE
+  lda CURLINE+1
+  sta KILLLINE+1
+  bra nocopy
+
+zerobuffer
+  stz KILLLINE
+  stz KILLLINE+1
+
+nocopy
+.)
+  ;; delete to the end of the line, erasing as we go with spaces
+
+  ldy col
+.(
+clearloop
+  lda (CURDATA),y
+  beq endclear
+  cmp #$0A
+  beq endclear
+  lda #0
+  sta (CURDATA),y
+  lda #32
+  jsr ROMPUTCH
+  cpy #MAXCOL
+  beq endclear
+  iny
+  bra clearloop
+endclear
+  ldy col
+  lda #$0A          ; make sure line is terminated properly
+  sta (CURDATA),y
+  jsr moveto
+  jmp editloop
+.)
+
+closeline
+.(
+  ;; is this the line we just erased? if so, copy data back.
+  ;; we keep it there in case it is yanked back afterwards.
+  lda CURLINE
+  cmp KILLLINE
+  bne nocopy
+  lda CURLINE+1
+  cmp KILLLINE+1
+  bne nocopy
+  ldy #0
+copyloop
+  lda KILLBUFFER,y
+  sta (CURDATA),y
+  cmp #$0A          ; stop after copying a newline
+  beq nocopy
+  iny
+  cpy #80           ; stop after 80 characters
+  bne copyloop
+
+nocopy
+  ;; now see about extending the kill buffer
+  lda KILLSTART     ; if KILLSTART is zero, reset
+  ora KILLSTART+1
+  beq resetkill
+
+  ldy #1            ; test if this kill extends the kill buffer
+  lda (KILLEND)
+  cmp CURLINE
+  bne resetkill     ; no match, so not extending
+  lda (KILLEND),y
+  cmp CURLINE+1
+  bne resetkill     ; no match, so not extending
+  lda CURLINE       ; set this line to be the new end of the kill buffer
+  sta KILLEND
+  lda CURLINE+1
+  sta KILLEND+1
+  bra skipreset
+
+resetkill
+  lda CURLINE       ; set this line to both start and end of kill buffer
+  sta KILLSTART
+  sta KILLEND
+  lda CURLINE+1
+  sta KILLSTART+1
+  sta KILLEND+1
+skipreset
+.)
+
+.(
+  ;; BUG SPECIAL CASE FOR LAST LINE!!!
+
+  ;; check if this was the first line of the text
+  lda CURLINE
+  cmp FIRSTLINE
+  bne notfirst
+  lda CURLINE+1
+  cmp FIRSTLINE+1
+  bne notfirst
+
+  ;; yes, it was. so reset FIRSTLINE and tweak the new first line's
+  ;; back pointer to point to itself.
+  ldy #1
+  lda (CURLINE)
+  sta FIRSTLINE
+  lda (CURLINE),y
+  sta FIRSTLINE+1
+
+  ldy #2
+  lda FIRSTLINE
+  sta (FIRSTLINE),y
+  iny
+  lda FIRSTLINE+1
+  sta (FIRSTLINE),y
+  bra continue
+
+notfirst
+  ;; grab the forward pointer and then insert it as the forward
+  ;; pointer for the previous line.
+  ldy #1            ; make a copy of this forward pointer on the stack
+  lda (CURLINE),y
+  pha
+  lda (CURLINE)     ; LSB is on top of stack
+  pha
+
+  ldy #2            ; set up SCRATCH as a pointer to the last line
+  lda (CURLINE),y
+  sta SCRATCH
+  iny
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  ldy #1
+  pla               ; pull old fwd pointer off stack and write
+  sta (SCRATCH)     ; into fwd pointer for previous line
+  pla               ; LSB first then MSB
+  sta (SCRATCH),y
+
+  ;; if we are deleting the LAST line, then reset LASTLINE
+  lda LASTLINE
+  cmp CURLINE
+  bne notlast
+  lda LASTLINE+1
+  cmp CURLINE+1
+  bne notlast
+
+  ldy #2            ; new last line is previous line (ie our back pointer)
+  lda (CURLINE),y
+  sta LASTLINE
+  iny
+  lda (CURLINE),y
+  sta LASTLINE+1
+  bra continue
+
+notlast
+  ;; now grab this line's backward pointer and make it the backward pointer
+  ;; for the following line
+  lda (CURLINE)     ; set up SCRATCH as pointer to next line
+  sta SCRATCH
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  ldy #2            ; write into backwards pointer
+  lda (CURLINE),y
+  sta (SCRATCH),y
+  iny
+  lda (CURLINE),y
+  sta (SCRATCH),y
+
+
+continue
+
+  ;; BUG MOVE THIS BACK?
+  ;; reset SCREENSTART if necessary
+  lda CURLINE
+  cmp SCREENSTART
+  bne skip
+  lda CURLINE+1
+  cmp SCREENSTART+1
+  bne skip
+
+  ldy #1
+  lda (CURLINE)
+  sta SCREENSTART
+  lda (CURLINE),y
+  sta SCREENSTART+1
+  
+skip
+  ;; BUG THIS IS WRONG IF WE DELETED THE LAST LINE
+  ldy #1
+  lda (CURLINE)     ; update CURLINE and CURDATA to point to next line
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA
+
+  jsr paintdown
+  jsr addstatus
+  jsr moveto
+  jmp editloop
+.)
+
+
+;;; yank. restore text from the kill buffer.
+;;; 
+;;; YANK works with DELLINE to maintain and manage a kill buffer.
+;;; The basic mechanism is that a contiguous block of deleted text
+;;; is maintained, delimited by the pointers KILLSTART and KILLEND,
+;;; which point to the deleted line structures. Their internal linkages
+;;; are maintained. So when we do a YANK, we follow the pointer chain
+;;; from beginning to end, copying text back in.
+yank
+  lda KILLSTART     ; nothing to yank?
+  ora KILLSTART+1
+  beq endyank
+
+  ;; set up to copy text from first kill line. using SCRATCH+4
+  ;; because linebeforesub uses SCRATCH.
+  lda KILLSTART
+  sta SCRATCH+4
+  lda KILLSTART+1
+  sta SCRATCH+5
+
+yankloop
+.(
+  ;; open line above
+  jsr linebeforesub
+  ;; at this point CURLINE points to the new blank line
+
+  ldy #4
+copyloop
+  lda (SCRATCH+4),y
+  sta (CURLINE),y
+  beq endcopy       ; end after copying a null
+  cmp #$0A          ; end after copying a newline
+  beq endcopy
+  iny
+  cpy #84           ; end after 80 characters
+  bne copyloop
+endcopy
+.)
+
+;  jsr paintdown     ; repaint before resetting line
+  stz col
+  inc row           ; lower of old/new line becomes the current line
+
+  ldy #1            ; update CURLINE
+  lda (CURLINE)
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+
+;  jsr addstatus
+;  jsr moveto
+
+  ;; do we need to scroll forward? (scrollfwdsub also trashes SCRATCH)
+  lda row
+  cmp #SCROLLROW
+  bne morerows
+  jsr scrollfwdsub
+  sec
+  lda row
+  sbc #12
+  sta row
+;  jsr moveto
+
+morerows
+  ;; another row to paste?
+  lda SCRATCH+4
+  cmp KILLEND
+  bne notdone
+  lda SCRATCH+5
+  cmp KILLEND+1
+  beq endyank
+notdone
+
+  ldy #1            ; move SCRATCH pointer forward along link chain
+  lda (SCRATCH+4)
+  pha
+  lda (SCRATCH+4),y
+  sta SCRATCH+5
+  pla
+  sta SCRATCH+4
+  bra yankloop
+
+endyank
+  clc               ; set up CURDATA -- move to ENDYANK?
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  jsr addstatus
+  jsr moveto
+  jmp repaint
+
+
+
+;;; newline opens and moves onto a new line below, potentially
+;;; breaking the current line in half.
+newline
+.(
+  stz PRISTINE
+  ldy col           ; where are we?
+  beq atstart       ; at start of line
+  lda (CURDATA),y
+  cmp #$0A          ; at end of line?
+  beq atend
+  jmp breakline     ; otherwise, middle
+
+atstart
+  jsr linebeforesub
+  ;; at this point CURLINE points to the new blank line
+
+  bra finishup
+
+atend
+  ;; allocate a new blank line after this one
+  jsr lineaftersub
+
+  ;; at this point CURLINE points to the old line
+.)
+finishup
+
+  jsr paintdown     ; repaint before resetting line
+  stz col
+  inc row           ; lower of old/new line becomes the current line
+
+nlfinish
+  ldy #1            ; update CURLINE
+  lda (CURLINE)
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+
+  clc               ; set up CURDATA
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  jsr addstatus
+  jsr moveto
+
+  ;; do we need to scroll forward?
+  lda row
+  cmp #SCROLLROW
+  bne end
+  jsr scrollfwdsub
+  sec
+  lda row
+  sbc #12
+  sta row
+  jsr moveto
+  jmp repaint
+
+end
+  jmp editloop
+
+breakline
+  jsr splitlinesub
+  bra finishup  
+
+;;; this code is shared between newline and openline. Splits a line
+;;; into two at the current point. Leaves CURLINE pointing to
+;;; the original line.
+splitlinesub
+  ;; make a new line. CURLINE remains unchanged. new line is blank
+  ;; with a traling NL.
+  jsr lineaftersub
+
+  ldy #1            ; get this line's forward pointer
+  lda (CURLINE)
+  sta SCRATCH
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  ;; we want to copy data from current insertion point to end of
+  ;; line. Make a pointer to the insertion point such that we can use
+  ;; Y as a pointer. Make both relative to the line structure so
+  ;; that the first character will be at Y=4.
+
+  ;; now make a pointer to data at the current insertion point
+  clc
+  lda CURLINE
+  adc col
+  sta SCRATCH+2
+  lda CURLINE+1
+  adc #0
+  sta SCRATCH+3
+
+.(
+  ldy #4
+copyloop
+  lda (SCRATCH+2),y
+  sta (SCRATCH),y
+  cmp #$0A
+  beq done
+  iny
+  bra copyloop
+done
+.)
+
+  ldy col
+  lda #$0A
+  sta (CURDATA),y
+  rts  
+
+
+;;; open up a new line before the CURLINE and leave CURLINE pointing to
+;;; it. this is basically the behavior of open-line, although newline
+;;; uses it too. at end, CURLINE has been updated to the new, blank
+;;; line.
+linebeforesub
+  ;; so the steps are:
+  ;;   copy CURLINE's back pointer into the new line
+  ;;   set the new line's forward pointer to be CURLINE
+  ;;   set the forward pointer for the prior line to be the new line
+  ;;   set CURLINE's back pointer to be the new line
+  ;;   update CURLINE and CURDATA
+  ;;   update NEXTFREE
+  ;; to start with, NEXTFREE is the new line and CURLINE is the
+  ;; current one.
+
+  ;; make the new line a blank line
+  ldy #4
+  lda #$0A
+  sta (NEXTFREE),y
+
+  ldy #2            ; get CURLINE's back pointer
+  lda (CURLINE),y
+  sta SCRATCH       ; keep a copy, we will need it in a moment
+  sta (NEXTFREE),y  ; meantime, reset it to the new line.
+  iny
+  lda (CURLINE),y
+  sta SCRATCH+1
+  sta (NEXTFREE),y
+
+  ldy #1            ; set the new line's forward pointer to CURLINE
+  lda CURLINE
+  sta (NEXTFREE)
+  lda CURLINE+1
+  sta (NEXTFREE),y
+
+.(
+  ;; we were already at the first line?
+  lda CURLINE
+  cmp FIRSTLINE
+  bne notfirst
+  lda CURLINE+1
+  cmp FIRSTLINE+1
+  bne notfirst
+
+  ;; we are the new first line. and there is no useful back pointer
+  lda NEXTFREE
+  sta FIRSTLINE
+  lda NEXTFREE+1
+  sta FIRSTLINE+1
+
+  ;; set new line's back pointer to itself
+  ldy #2
+  lda NEXTFREE
+  sta (NEXTFREE),y
+  iny
+  lda NEXTFREE+1
+  sta (NEXTFREE),y
+  bra continue
+
+notfirst
+  ldy #1
+  lda NEXTFREE      ; set prior line's forward pointer to new line
+  sta (SCRATCH)     ; only makes sense when not new first line
+  lda NEXTFREE+1
+  sta (SCRATCH),y
+
+continue
+  ldy #2            ; set current line's back pointer to new line
+  lda NEXTFREE
+  sta (CURLINE),y
+  iny
+  lda NEXTFREE+1
+  sta (CURLINE),y
+.)
+
+  ;; check if we need to reset SCREENSTART
+.(
+  lda CURLINE
+  cmp SCREENSTART
+  bne nope
+  lda CURLINE+1
+  cmp SCREENSTART+1
+  bne nope
+  lda NEXTFREE
+  sta SCREENSTART
+  lda NEXTFREE+1
+  sta SCREENSTART+1
+nope
+.)
+
+  clc
+  lda NEXTFREE
+  sta CURLINE
+  adc #4
+  sta CURDATA
+  lda NEXTFREE+1
+  sta CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  clc
+  lda NEXTFREE
+  adc #84
+  sta NEXTFREE
+  lda NEXTFREE+1
+  adc #0
+  sta NEXTFREE+1
+
+  rts
+
+
+;;; open a new blank line after the current line. at the end, CURLINE points
+;;; to the old line.
+lineaftersub
+.(
+  ;; allocate a new blank line after current line. So --
+  ;; set current next line's back pointer to the new line
+  ;; set new line's forward pointer to that line
+  ;; grab our forward pointer and set it to the new line
+  ;; set new line's backward pointer to us
+  ;; reset NEXTFREE
+
+  ;; make the new line a blank line
+  ldy #4
+  lda #$0A
+  sta (NEXTFREE),y
+
+  lda NEXTFREE
+  sta LASTLINE
+  lda NEXTFREE+1
+  sta LASTLINE+1
+
+notlast
+  ldy #1            ; make a copy of pointer to next line
+  lda (CURLINE)
+  sta SCRATCH
+  lda (CURLINE),y
+  sta SCRATCH+1
+
+  lda SCRATCH       ; new line's fwd pointer to former next line
+  sta (NEXTFREE)
+  lda SCRATCH+1
+  sta (NEXTFREE),y
+
+  ldy #2            ; former next line's back pointer to new line
+  lda NEXTFREE
+  sta (SCRATCH),y
+  iny
+  lda NEXTFREE+1
+  sta (SCRATCH),y
+
+  lda CURLINE+1     ; new line's back pointer to curline
+  sta (NEXTFREE),y
+  dey
+  lda CURLINE
+  sta (NEXTFREE),y
+
+  ldy #1            ; current line's forward pointer to new line
+  lda NEXTFREE
+  sta (CURLINE)
+  lda NEXTFREE+1
+  sta (CURLINE),y
+
+  ;; Check if we need to reset LASTLINE
+  lda LASTLINE
+  cmp CURLINE
+  bne nope
+  lda LASTLINE+1
+  cmp CURLINE+1
+  bne nope
+  lda NEXTFREE
+  sta LASTLINE
+  lda NEXTFREE+1
+  sta LASTLINE+1
+nope
+  clc               ; update next available line
+  lda NEXTFREE
+  adc #84
+  sta NEXTFREE
+  lda NEXTFREE+1
+  adc #0
+  sta NEXTFREE+1
+.)
+  rts
+
+nextrow
+.(
+  lda CURLINE       ; do nothing if there is no more data
+  ora CURLINE+1
+  beq donothing
+
+  lda row
+  cmp #MAXROW       ; if we're on the last row, scroll forward
+  beq scrollfwd
+
+  inc row
+  ldy #1
+  lda (CURLINE)
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+  jsr moveto
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+donothing
+ jmp editloop
+
+scrollfwd
+  jsr scrollfwdsub
+
+  ldy #1
+  lda (CURLINE)
+  pha
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+  jsr moveto
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+  lda #10
+  sta row
+
+  jmp repaint
+.)
+
+;;; scroll forward is used by nextrow and also by newline as we approach
+;;; the bottom of the screen
+scrollfwdsub
+.(
+  phx
+  ldx #12
+  lda SCREENSTART
+  sta SCRATCH
+  lda SCREENSTART+1
+  sta SCRATCH+1
+
+lineloop
+  ldy #1
+  lda (SCRATCH),y
+  pha
+  lda (SCRATCH)
+  sta SCRATCH
+  pla
+  sta SCRATCH+1
+  dex
+  bne lineloop
+  plx
+
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+
+  rts
+.)
+
+openline
+.(
+  stz PRISTINE
+  lda col           ; make sure we are at start of line
+  beq atstart
+
+  ;; opening mid-line, so split line
+  jsr splitlinesub
+  bra finishopen
+
+atstart
+  ;; allocate a new line and insert it where the current line is.
+  jsr linebeforesub
+
+finishopen
+  jsr paintdown
+  jsr addstatus
+  jsr moveto
+  jmp editloop
+.)
+
+prevrow
+.(
+  lda CURLINE       ; do nothing if at first line of data
+  cmp FIRSTLINE
+  bne nextcheck
+  lda CURLINE+1
+  cmp FIRSTLINE+1
+  beq donothing
+
+nextcheck
+  lda row           ; top line of screen but prior data, so scroll back
+  beq scrollback
+
+  ldy #3            ; follow back-pointer from current line to get
+  lda (CURLINE),y   ; last one, and update both CURLINE and CURDATA
+  pha
+  dey
+  lda (CURLINE),y
+  sta CURLINE
+  pla
+  sta CURLINE+1
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  dec row
+  jsr moveto
+
+donothing
+  jmp editloop
+
+scrollback
+.(
+  ;; find a new SCREENSTART. start with the current one and go back
+  ;; up to 15 lines (or until the start of the data).
+
+  lda SCREENSTART
+  sta SCRATCH
+  lda SCREENSTART+1
+  sta SCRATCH+1
+
+  phx
+  ldx #15
+lineloop
+  ;; It would be safe not to look for an end of the pointer chain, because
+  ;; the first line's back pointer always points to itself. But we need
+  ;; to know how many lines back we have scrolled so that we can position
+  ;; the cursor correctly.
+
+  ldy #2
+  lda (SCRATCH),y
+  cmp SCRATCH
+  bne continue
+  iny
+  lda (SCRATCH),y
+  cmp SCRATCH+1
+  beq endloop
+
+continue
+  ldy #3            ; follow the back-pointer
+  lda (SCRATCH),y
+  pha
+  dey
+  lda (SCRATCH),y
+  sta SCRATCH
+  pla
+  sta SCRATCH+1
+
+  dex
+  bne lineloop
+endloop
+  stx temp
+  plx
+.)
+
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+
+  ;; curline should move one back
+  ldy #2
+  lda (CURLINE),y
+  pha
+  iny
+  lda (CURLINE),y
+  sta CURLINE+1
+  pla
+  sta CURLINE
+
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  sec
+  lda #14      ; 15 was our count; 14 is one less because we are moving
+  sbc temp     ; up one line.
+  sta row
+  jsr moveto
+
+  jmp repaint
+.)
+
+testcode
+  lda CURDATA
+  sta MARKROW
+  lda CURDATA+1
+  sta MARKROW+1
+  lda col
+  sta MARKCOL
+  jmp editloop
+
+extended
+  lda #<ctrlxmsg
+  sta PRINTVEC
+  lda #>ctrlxmsg
+  sta PRINTVEC+1
+  jsr prtmessage
+  jsr ROMGETCH
+  cmp #19           ; ^S
+  beq ctrls
+  cmp #3            ; ^C
+  beq ctrlc
+  jsr clrmessage
+  jmp editloop
+
+ctrls
+  jsr savefile
+  lda #<savedmsg
+  sta PRINTVEC
+  lda #>savedmsg
+  sta PRINTVEC+1
+  jsr prtmessage
+  jsr addstatus
+  jsr moveto
+  jmp editloop
+
+ctrlc
+  jmp exit
+
+ctrlxmsg   .byte "C-x-", $00
+savedmsg   .byte "Saved", $00
+unsavedmsg .byte "Discard unsaved changes?", $00
+
+exit
+  lda PRISTINE
+  bne doexit
+  lda #<unsavedmsg
+  sta PRINTVEC
+  lda #>unsavedmsg
+  sta PRINTVEC+1
+  jsr prtmessage
+  jsr ROMGETCH
+  cmp #"y
+  beq doexit
+  cmp #"Y
+  beq doexit
+  jsr clrmessage
+  jmp editloop
+
+doexit
+  jsr clrmessage
+  lda #NROWS
+  sta row
+  stz col
+  jsr moveto
+  rts
+
+fowdword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+findword
+  lda (CURDATA),y
+  beq atend
+  cmp #$0A
+  beq atend
+  cmp #$20
+  bne findend
+  iny
+  cpy #MAXCOL
+  beq atend
+  bra findword
+findend
+  ;; now find the end of the word
+  lda (CURDATA),y
+  beq atend
+  cmp #$0A
+  beq atend
+  cmp #$20
+  beq found  
+  iny
+  cpy #MAXCOL
+  bne findend
+found  
+atend
+  sty col
+  jsr moveto
+  jmp editloop
+.)
+
+backword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+  beq donebackword
+findword
+  lda (CURDATA),y
+  beq nextchar
+  cmp #$20
+  bne findstart
+nextchar
+  dey
+  beq startofline
+  bra findword
+findstart
+  ;; now find the start of the word
+  lda (CURDATA),y
+  beq startofline
+  cmp #$20
+  beq found  
+  dey
+  bne findstart
+found  
+startofline
+  sty col
+  jsr moveto
+donebackword
+  jmp editloop
+.)
+
+
+nextpage
+.(
+  ;; reset SCREENSTART forward by about 20 lines
+  phx
+
+  ldx #NROWS
+  dex
+  dex
+
+  lda SCREENSTART
+  sta SCRATCH
+  lda SCREENSTART+1
+  sta SCRATCH+1
+
+lineloop
+  ;; is there another line? look at forward pointer
+  ldy #0
+  lda (SCRATCH),y
+  iny
+  ora (SCRATCH),y
+  beq endloop
+
+  lda (SCRATCH),y
+  pha
+  dey
+  lda (SCRATCH),y
+  sta SCRATCH
+  pla
+  sta SCRATCH+1
+
+  dex
+  bne lineloop
+endloop
+  plx
+
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+  stz row
+  stz col
+
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  jmp repaint
+.)
+
+prevpage
+  jmp editloop
+
+filestart
+  lda FIRSTLINE
+  sta SCREENSTART
+  lda FIRSTLINE+1
+  sta SCREENSTART+1
+
+  stz row
+  stz col
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+  jmp repaint
+
+
+;;; move cursor to the end of the file, which most likely involves
+;;; repositinging the screen so that the last line is included.
+fileend
+
+  lda LASTLINE      ; set up SCRATCH. will count back from
+  sta SCRATCH       ; LASTLINE to find the new start of screen.
+  lda LASTLINE+1
+  sta SCRATCH+1
+
+  stz SCRATCH+2     ; keep track of how far back from end of screen
+  ldy #2            
+
+moveloop
+  lda SCRATCH       ; have we reached start of screen?
+  cmp SCREENSTART
+  bne moveback      ; no, so continue to move back
+  lda SCRATCH+1
+  cmp SCREENSTART+1
+  beq hitstart      ; yes we have hit the start
+moveback
+  lda (SCRATCH),y   ; follow backwards pointer
+  pha
+  iny
+  lda (SCRATCH),y
+  sta SCRATCH+1
+  pla
+  sta SCRATCH
+  dey
+  lda SCRATCH+2     ; stop after we have moved back 19 times
+  inc
+  cmp #19
+  beq hitmax        ; 19 lines back from end is max
+  sta SCRATCH+2
+  bra moveloop
+
+hitmax
+  ;; if we get here, we have identified line n-19.
+  ;; reposition screen, then reposition cursor
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+  lda #19
+  sta row
+  bra windup
+
+hitstart
+  ;; if we get here, we hit the start of the screen before moving
+  ;; back 20 lines, ie, the last line is already on the screen.
+  ;; SCRATCH+2 tells us how many lines between screenstart and the end
+  ;; so set row to that.
+  lda SCRATCH+2
+  sta row
+
+windup
+  lda LASTLINE
+  sta CURLINE
+  lda LASTLINE+1
+  sta CURLINE+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  ;; move cursor to the end of that line
+  ldy #0
+.(
+loop
+  lda (CURDATA),y
+  beq done
+  cmp #$0A
+  beq done
+  cpy #79
+  beq done
+  iny
+  bra loop
+done
+.)
+  sty col
+  jsr moveto
+  jmp repaint
+
+
+#if 0
+  OLD FILEEND CODE
+.(
+  ;; jump to a point about 10 lines from the end of the file
+
+  phx
+  ldx #12
+
+  lda LASTLINE
+  sta SCRATCH
+  lda LASTLINE+1
+  sta SCRATCH+1
+
+lineloop
+  ldy #2
+  lda (SCRATCH),y
+  pha
+  iny
+  lda (SCRATCH),y
+  sta SCRATCH+1
+  pla
+  sta SCRATCH
+
+  dex
+  bne lineloop
+
+  plx
+
+  ;; reuse code from above???
+
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+
+  stz row
+  stz col
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+  jmp repaint
+.)
+#endif
+
+
+save
+  jsr savefile
+  jsr addstatus
+  jmp editloop
+
+
+
+;;;
+;;; *** SCREEN CONTROL
+;;;
+
+;; for small integers (<100), convert to decimal and output
+todecimal
+.(
+  ldy #$30
+  sty temp  ; temp
+convloop
+  cmp #$0A
+  bmi donedigit
+  sec
+  sbc #$0A
+  inc temp
+  bne convloop
+donedigit
+  tay
+  lda temp
+  jsr ROMPUTCH
+  tya
+  clc
+  adc #$30
+  jsr ROMPUTCH
+  rts
+.)
+
+cls
+  lda #$1B  ; esc
+  jsr ROMPUTCH
+  lda #$5B  ; "["
+  jsr ROMPUTCH
+  lda #$32  ; "2"
+  jsr ROMPUTCH
+  lda #$4A  ; "J"
+  jsr ROMPUTCH
+  rts
+
+home
+;  lda #$1B  ; esc
+;  jsr ROMPUTCH
+;  lda #$5B  ; [
+;  jsr ROMPUTCH
+;  lda #$48  ; H
+;  jsr ROMPUTCH
+  ldy #0
+  lda #$2a
+  jsr writereg
+  ldy #0
+  lda #$2b
+  jsr writereg
+  ldy #0
+  lda #$2c
+  jsr writereg
+  lda #$2d
+  ldy #0
+  jsr writereg
+  
+  rts
+
+clrtoend
+  lda #$1B  ; ESC
+  jsr ROMPUTCH
+  lda #$5B  ; [
+  jsr ROMPUTCH
+  lda #$30  ; 0
+  jsr ROMPUTCH
+  lda #$4A ; H
+  jsr ROMPUTCH
+  rts
+
+moveto
+;  lda #$1B ; ESC
+;  jsr ROMPUTCH
+;  lda #$5B ; [
+;  jsr ROMPUTCH
+;  lda row  ; row
+;  inc               ; code counts from 0, terminal counts from 1
+;  jsr todecimal
+;  lda #$3B  ; semic
+;  jsr ROMPUTCH
+;  lda col  ; col
+;  inc               ; code counts from 0, terminal counts from 1
+;  jsr todecimal
+;  lda #$48  ; H
+;  jsr ROMPUTCH
+  ;; take COL and multiply by 8 for horizontal position
+  stz SCRATCH+1
+  lda col
+  asl
+  rol SCRATCH+1
+  asl
+  rol SCRATCH+1
+  asl
+  rol SCRATCH+1
+  tya
+  
+  lda #$2a
+  jsr writereg
+  ldy SCRATCH+1
+  lda #$2b
+  jsr writereg
+
+  ;; take ROW and multiply by 16 for vertical position
+  stz SCRATCH+1
+  lda row
+  asl
+  rol SCRATCH+1
+  asl
+  rol SCRATCH+1
+  asl
+  rol SCRATCH+1
+  asl
+  rol SCRATCH+1
+  tya
+
+  lda #$2c
+  jsr writereg
+  lda #$2d
+  ldy SCRATCH+1
+  jsr writereg
+  rts
+
+
+;;;
+;;; *** FILE SAVING
+;;;
+
+FROMPTR=lower       ; reusing/renaming from earlier
+TOPTR=BUFPTR        ; reusing/renaming from earlier
+TMPSIZE=DATAPTR     ; reusing/renaming from earlier
+TMPY=MAXDATA        ; reusing/renaming from earlier
+
+savefile
+.(
+  lda #1
+  sta PRISTINE
+  ldx SAVEX         ; restore the stack pointer
+
+  lda CLUSTER       ; new file or existing?
+  ora CLUSTER+1
+  bne sharedsave    ; existing file, we already know the cluster
+
+  ;; if we are here, this is a new file, so we have to set it up
+  ;; in the directory and get the cluster number.
+  
+  jsr mknewfile
+
+  ;; get cluster number and cache it
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+  ldy #26
+  lda (SCRATCH),y
+  sta CLUSTER
+  iny
+  lda (SCRATCH),y
+  sta CLUSTER+1
+
+  ;; clear off the stack
+  inx
+  inx
+  inx
+  inx
+  inx
+  inx
+
+sharedsave
+  ;; zero out our size counter (keeps track of writes)
+  stz TMPSIZE
+  stz TMPSIZE+1
+
+  ;; set the file length to zero
+  stz FILELEN
+  stz FILELEN+1
+  stz FILELEN+2
+  stz FILELEN+3
+
+  lda FIRSTLINE     ; data to be saved starts here
+  sta FROMPTR
+  lda FIRSTLINE+1
+  sta FROMPTR+1
+
+  lda #3
+  sta TMPY          ; this is going to be where Y starts off in fillbuffer
+
+writeloop
+  ;; fill the buffer
+  jsr fillbuffer
+
+  ;; flush the buffer. set up stack for save.
+  dex               ; first, the address parameter
+  dex
+  lda #<LBLOCK
+  sta 1,x
+  lda #>LBLOCK
+  sta 2,x
+  dex               ; second, the count parameter (512)
+  dex
+  lda #2
+  sta 2,x
+  stz 1,x
+  dex               ; third, the cluster parameter
+  dex
+  lda CLUSTER
+  sta 1,x
+  lda CLUSTER+1
+  sta 2,x
+  dex               ; fourth, the offset parameter
+  dex
+  lda TMPSIZE
+  sta 1,x
+  lda TMPSIZE+1
+  sta 2,x
+
+  ;; do the write
+  jsr ROMSAVEMEM
+
+  ;; update offset in case we need to write more data
+  clc
+  lda TMPSIZE+1
+  adc #2
+  sta TMPSIZE+1
+
+  ;; more data?
+  lda FROMPTR
+  ora FROMPTR+1
+  bne writeloop
+
+  ;; reset sector cache sicne I have trashed LBLOCK many times
+  stz CURSEC
+  stz CURSEC+1
+  stz CURSEC+2
+  stz CURSEC+3
+
+  ;; open directory entry
+  jsr ROMFINDDIRW
+
+  lda 1,x
+  sta SCRATCH
+  lda 2,x
+  sta SCRATCH+1
+
+  ;; update filelength
+  ldy #28
+  lda FILELEN
+  sta (SCRATCH),y
+  iny
+  lda FILELEN+1
+  sta (SCRATCH),y
+  iny
+  lda FILELEN+2
+  sta (SCRATCH),y
+  iny
+  lda FILELEN+3
+  sta (SCRATCH),y
+
+  ;; flush directory entry
+  inx
+  inx
+  jsr ROMSDSAVBUF
+
+
+  rts
+.)
+
+mknewfile
+  ;; the named file does not exist, so make a new file with that name
+  ;; .. which means to put filename as c-string on the stack
+  ;; .. then jsr newfilesub
+  dex
+  dex
+  lda #<WORD
+  sta stackbase+1,x
+  lda #>WORD
+  sta stackbase+2,x
+  jsr ROMNEWFILE
+  rts
+
+;;; WARNING!! ENSURE FROMPTR IS ALREADY SET BEFORE ENTERING
+;;;
+fillbuffer
+  ;; I'm going to start messing with LBLOCK, so clear out the
+  ;; sector cache so as not to confuse myself later.
+  stz CURSEC
+  stz CURSEC+1
+  stz CURSEC+2
+  stz CURSEC+3
+
+  ;; FROMPTR should already be set from last time through (or from
+  ;; our caller, which should be savefile).
+
+  ;; start copying. this isn't going to be the most efficient mechanism but
+  ;; it should be the least error-prone.
+
+blockcopy
+  lda #<LBLOCK      ; TOPTR gets reset every time
+  sta TOPTR
+  lda #>LBLOCK
+  sta TOPTR+1
+
+  ldy TMPY          ; 3 at outset, will start at 4 after INY
+copyloop
+  iny
+  lda (FROMPTR),y
+  sta (TOPTR)
+
+  cmp #$0A          ; end-of-line marker?
+  bne nexttest
+
+  ;; end of this line
+  ;; first, update FILELEN by y-3
+  dey
+  dey
+  dey
+  clc
+  tya
+  adc FILELEN
+  sta FILELEN
+  lda FILELEN+1
+  adc #0
+  sta FILELEN+1
+  lda FILELEN+2
+  adc #0
+  sta FILELEN+2
+  lda FILELEN+3
+  adc #0
+  sta FILELEN+3
+
+
+  ldy #1            ; move pointer to next line
+  lda (FROMPTR),y
+  pha
+  lda (FROMPTR)
+  sta FROMPTR
+  pla
+  sta FROMPTR+1
+  ora FROMPTR       ; test for end-of-data (ptr=0)
+  beq dataended
+  ldy #3            ; reset Y
+  
+nexttest
+.(
+  clc
+  lda TOPTR
+  adc #1
+  sta TOPTR
+  bcc skip
+  inc TOPTR+1
+skip
+.)
+  lda TOPTR+1       ; check for end of buffer
+  cmp #>IOSENTINEL
+  bne copyloop
+  lda TOPTR         ; this is technically not needed but leave it
+  cmp #<IOSENTINEL
+  bne copyloop
+
+  ;; this means we've hit the end of the buffer
+  ;; save Y for next time
+  sty TMPY
+
+dataended
+  rts
+
+
+
+;;;
+;;; *** LIBRARY ROUTINES
+;;;
+
+;;; extract first parameter and store it in WORD
+;;;
+p1toword
+.(
+  ldy #0
+  ;; skip to first space (ie skip past the command)
+skip1
+  lda INPUT,y
+  beq p1error
+  cmp #32
+  beq skip2
+  iny
+  beq p1error
+  bra skip1
+  ;; now skip to first following non-space (ie start of filename)
+skip2
+  lda INPUT,y
+  beq p1error
+  cmp #32
+  bne copychars
+  iny
+  beq p1error
+  bra skip2
+copychars
+  phx
+  ldx #1
+nextchar
+  lda INPUT,y
+  sta WORD,x
+  beq donecopy
+  cmp #32
+  beq donecopy
+  inx
+  iny
+  bne nextchar
+donecopy
+  stx WORD          ; store the character count
+  plx
+  clc
+  bra p1end
+
+p1error
+  ;; there's been some problem finding the name, so
+  ;; report an error and quit.
+  lda #<p1errstr
+  sta PRINTVEC
+  lda #>p1errstr
+  sta PRINTVEC+1
+  jsr ROMPRTSTR
+  sec
+.)
+p1end
+  rts
+
+
+;; convert a cluster address into a sector address
+;; calculation is cluster-2 * sectors/cluster + resv + len FATs + len root
+;; generally, cluster-2 * 64 + 545
+cltosector
+.(
+  ;; subtract 2
+  sec
+  lda stackbase+1,x
+  sbc #2
+  sta stackbase+1,x
+  lda stackbase+2,x
+  sbc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  sbc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  sbc #0
+  sta stackbase+4,x
+done
+.)
+
+  ;; shift left 6 times, to multiply by 64
+  clc
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  rol stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  ;; add 545 ( = 512+33 = 2*256 + 33)
+  clc
+  lda stackbase+1,x
+  adc #33
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #2
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+
+  rts
+
+
+p1errstr .byte "Usage: med filename", $0a, $0d, $00
+fileerrstr .byte "Error: file already exists", $0a, $0d, $00
+replacestr .byte "Replace existing file? ", $00
+createmsg  .byte "Creating new file", $0a, $0d, $00
+
+
+vputa
+;  cmp #$0d          ; carriage return
+;  beq vcr
+;  cmp #$0a          ; line feed
+;  beq vlf
+;  cmp #$08          ; backspace
+;  beq vbs
+
+  ;; with the special cases out of the way, just display
+  ;; the character.
+  pha
+  phy
+  tay
+  lda #MRWC
+  jsr wrcommand
+  tya
+  jsr wrdata
+  ply
+;  inc VCOL
+;  lda VCOL          ; have we run off the end of the line?
+;  cmp #100
+;  bne endchar       ; no, so continue
+;  stz VCOL          ; yes -- update column
+;  inc VROW
+;  lda VROW          ; were we on the last row
+;  cmp #30
+;  beq scroll        ; yes, so scroll screen up
+endchar
+  pla
+  rts
+
+
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+
+crlf
+  lda #13
+  jsr ROMPUTA
+  lda #10
+  jsr ROMPUTA
+  rts
+
+
+startstr:   .byte "xmodem listening", $0d, $0a, $00
+recvdstr:   .byte "xmodem received", $0d, $0a, $00
+blockerrstr:.byte "block count error", $0a, $0d, $00
+chksmerrstr:.byte "checksum errror", $0a, $0d, $00
+headerrstr: .byte "header error", $0a, $0d, $00
+hextable:   .byte "0123456789ABCDEF"
+
+
+UVIA_PORTB = $8010
+UVIA_PORTA = $8011
+UVIA_DDRB  = $8012
+UVIA_DDRA  = $8013
+
+SPI_PORT   = UVIA_PORTB
+
+
+;; Command/Data codes for SPI
+DATAWRITE=$00
+DATAREAD=$40 
+CMDWRITE=$80 
+CMDREAD =$C0  
+
+;;; also include all the RA8875-specific definitions
+#include "spivdefs.a65"
+
+#include "delay.a65"
+
+
+;;;
+;;; SECTION 1: Low-level SPI code
+;;;
+;;;
+
+
+;;;
+;;; Wiring details:
+;;;   CLK is PB0, ie 1
+;;;   MOSI is PB1, ie 2
+;;;   CS is PB2, ie 4
+;;;   MISO is PB7, which maps onto S flag on BIT (test with BPL and BMI)
+;;; MISO, MOSI, and CS all have pull-up resisters, so they are high in
+;;; the idle/unused state, except when pulled low by active circuitry.
+;;;
+;;; For the moment, this is the same setup as the SD card reader.
+;;; Since I want to be able to set things up for keyboard input on
+;;; on the same port, I'm likely to want to move some of the lines
+;;; around later. However, for now, I wannt to use validated code.
+;;;
+;;; Other bits:
+;;;    BACKLIGHT  PB3, ie 8
+;;;    BUSY       PB4, ie 16
+;;;    RESET      PB5, ie 32
+;;;
+;;; Device is SPI Mode 0. This means:
+;;;   clock idles low
+;;;   clock active high
+;;;   data read on rising edge
+
+SPI_CLK  = 1
+SPI_MOSI = 2
+SPI_CS   = 4
+LIGHT    = 8
+SPI_MISO = 128
+BUSYMASK = 16
+RESET    = 32
+
+;;; set up data direction for SPI_PORT -- bits 0, 1, 2, 3, and 5 are
+;;; outputs and bits 4, 6 (NC), and 7 are inputs.
+setup6522
+  lda #$2f
+  sta UVIA_DDRB
+  lda #SPI_MOSI|RESET|SPI_CS
+  sta SPI_PORT
+  rts
+
+
+;;; Send a byte via SPI. This faster version of the original code
+;;; unrolls the loop and relies on shifts rather than branches to
+;;; determine the bit to send. This is written on the assumption
+;;; that the CLK signal idles low.
+;;;
+sendbyte
+  phy
+  ;tay               ; y will store the data as we transmit it
+
+; bit 7
+  ;tya
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #2            ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  ;; NOTE used to have "dec SPI_PORT" right after the inc but I
+  ;; moved it down to even out the duty cycle. I strongly suspect
+  ;; that this is completely irrelevant. Once everything is working,
+  ;; try moving it back since the code reads better in its original
+  ;; configuration.
+
+; bit 6
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 5
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 4
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 3
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 2
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 1
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 0
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+  ;; set MOSI high at end
+  lda #SPI_MOSI
+  tsb SPI_PORT
+
+  dec SPI_PORT      ; 6 cycles
+
+  ply
+  rts
+
+
+getresponse
+.(
+  phx
+  ldx #0
+loop
+  inx
+  beq timedout
+  jsr recv8bits
+  cmp #$ff
+  beq loop
+timedout
+  plx
+  rts
+.)
+
+;;; read a byte via SPI from SPI_PORT, returned in accumulator.
+;;; Assume the CLK idles low.
+recv8bits
+  phx               ; store X, since we'll use it (and can't use Y)
+  lda #0            ; zero out initial result
+
+  inc SPI_PORT      ; set CLK high for first bit
+  ldx SPI_PORT      ; read data
+  cpx #128          ; this sets carry flag to top bit
+  rol               ; shift carry into A
+  dec SPI_PORT      ; set clock off
+
+  inc SPI_PORT      ; set CLK high #2
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #3
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #4
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #5
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #6
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #7
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #8
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  plx               ; restore X
+  rts               ; return with data in A
+
+
+;;;
+;;; SECTION 2: Read and set RA8875 registers
+;;;
+;;;
+
+;;; poll the WAIT flag until it goes high
+awaitfree
+;  pha
+;waitloop
+;  lda SPI_PORT
+;  and #BUSYMASK
+;  beq waitloop
+;  pla
+  rts
+
+wrcommand
+  pha               ; cache value
+
+;  lda #SPI_CS       ; set CS to low
+;  trb SPI_PORT
+  lda #RESET        ; everything low except RESET
+  sta SPI_PORT
+
+  lda #CMDWRITE     ; send CMDWRITE
+  jsr sendbyte
+  pla               ; retreive value
+  jsr sendbyte      ; send it
+
+;  lda #SPI_MOSI     ; set MOSI high
+;  tsb SPI_PORT
+
+;  lda #SPI_CS       ; set CS high
+;  tsb SPI_PORT
+  lda #SPI_MOSI|SPI_CS|RESET
+  sta SPI_PORT
+  rts
+
+;rdcommand
+;  lda #SPI_CS       ; set CS low
+;  trb SPI_PORT
+;
+;  ;; send CMDREAD
+;  lda #CMDREAD      ; send CMDREAD
+;  jsr sendbyte
+;  jsr getresponse   ; receive data into A
+;
+;  pha               ; cache it temporarily
+;  lda #SPI_CS       ; set CS high
+;  tsb SPI_PORT
+;  pla               ; retrieve data
+;  rts
+
+wrdata
+  pha
+;  ;; set CS low
+;  lda #SPI_CS
+;  trb SPI_PORT
+  lda #RESET        ; everything low except RESET
+  ;; send DATAWRITE
+  lda #DATAWRITE
+  jsr sendbyte
+  pla
+  ;; send A
+  jsr sendbyte
+;  ;; set MOSI high
+;  lda #SPI_MOSI
+;  tsb SPI_PORT
+;  ;; set CS high
+;  lda #SPI_CS
+;  tsb SPI_PORT
+  lda #SPI_MOSI|SPI_CS|RESET   ; CS, MOSI, RESET high
+  sta SPI_PORT
+  rts
+
+rddata
+;  lda #SPI_CS       ; set CS low
+;  trb SPI_PORT
+  lda #RESET
+  sta SPI_PORT      ; RESET high, everything else low
+
+  lda #DATAREAD     ; send DATAREAD
+  jsr sendbyte
+
+;  lda #SPI_MOSI     ; keep MOSI low while awaiting response
+;  trb SPI_PORT
+  lda #RESET
+  sta SPI_PORT      ; RESET high, everything else low
+
+  jsr recv8bits     ; get response into A
+  pha               ; cache it for a moment
+
+;  lda #SPI_MOSI     ; set MOSI high
+;  tsb SPI_PORT
+;  lda #SPI_CS       ; set CS high
+;  tsb SPI_PORT
+  lda #SPI_MOSI|SPI_CS|RESET
+  sta SPI_PORT
+
+  pla               ; retreive data
+  rts
+
+;; write value in Y to register in A
+writereg
+  jsr wrcommand
+  tya
+  jsr wrdata
+  rts
+
+readreg
+  jsr wrcommand
+  jsr rddata
+  rts
+  
+
+
+;;;
+;;; SECTION 3: Control RA8875 functions
+;;;
+;;;
+
+;;; Initialize video processor
+;;;
+vidinit
+  ;; initial setup -- CLOCK high, MOSI high, RESET high, CS high
+  lda #SPI_CLK|SPI_MOSI|RESET|SPI_CS
+  sta SPI_PORT
+
+  ;; for reset -- hold RESET, CLK, and MOSI all low
+  ;; that's basically everything except MISO, right?
+  lda #SPI_MISO
+  sta SPI_PORT
+  ;; short pause
+  jsr delay100ms
+  ;; set RESET, CLK, MOSI and CS all high
+  lda #RESET|SPI_CLK|SPI_MOSI|SPI_CS
+  sta SPI_PORT
+  jsr delay100ms
+
+  ;; now set chip select low (and leave it there)
+  lda #RESET|SPI_CLK|SPI_MOSI
+  sta SPI_PORT
+
+
+  ;; check things are okay -- read status register and confirm value
+  lda #0
+  jsr wrcommand
+  jsr rddata
+  cmp #$75
+  beq endvidinit
+fail
+;  jsr putax
+;  lda #<failstr
+;  sta PRINTVEC
+;  lda #>failstr
+;  sta PRINTVEC+1
+;  jsr printvecstr
+endvidinit  
+  rts
+
+successstr .byte "reg 0 read successful", $0a, $0d, $0
+failstr    .byte " != 0x75", $0a, $0d, $0
+
+
+;;; Initialize registers to default settings
+;;;
+reginit
+  lda #PLLC1
+  ldy #PLLC1_PLLDIV1+11
+  jsr writereg
+  jsr delay1ms
+
+  lda #PLLC2
+  ldy #PLLC2_DIV4
+  jsr writereg
+  jsr delay1ms
+
+  lda #SYSR
+  ldy #SYSR_16BPP|SYSR_MCU8
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #PCSR
+  ldy #PCSR_PDATL|PCSR_2CLK
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #HDWR
+  ldy #99
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #HNDFTR
+  ldy #HNDFTR_DE_HIGH
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #HNDR
+  ldy #3
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #HSTR
+  ldy #3
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #HPWR
+  ldy #HPWR_LOW+11
+  jsr writereg
+  jsr delay1ms
+
+  ;; vertical settings registers
+  ;jsr awaitfree
+  lda #VDHR0
+  ldy #<479
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #VDHR1
+  ldy #>479
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #VNDR0
+  ldy #31
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #VNDR1
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #VSTR0
+  ldy #22
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #VSTR1
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #VPWR
+  ldy #VPWR_LOW+1
+  jsr writereg
+  jsr delay1ms
+
+
+  ;; active window X
+
+  ;jsr awaitfree
+  lda #HSAW0
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #HSAW1
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #HEAW0
+  ldy #<799
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #HEAW1
+  ldy #>799
+  jsr writereg
+  jsr delay1ms
+
+  ;; active window Y
+  ;jsr awaitfree
+  lda #VSAW0
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #VSAW1
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #VEAW0
+  ldy #<479
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #VEAW1
+  ldy #>479
+  jsr writereg
+  jsr delay1ms
+
+  ;jsr awaitfree
+  lda #MCLR
+  ldy #MCLR_START|MCLR_FULL
+  jsr writereg
+
+  jsr delay1s
+
+  rts
+
+
+;;; Turn on display and backlight
+;;;
+displayon
+
+  ;tft.displayOn(true);
+  lda #PWRR
+  ldy #PWRR_NORMAL|PWRR_DISPON
+  jsr writereg
+  
+  ; tft.GPIOX(true);      // Enable TFT - display enable tied to GPIOX
+  lda #GPIOX
+  ldy #1
+  jsr writereg
+
+  ; tft.PWM1config(true, RA8875_PWM_CLK_DIV1024); // PWM output for backlight
+  lda #P1CR
+  ldy #P1CR_ENABLE|PWM_CLK_DIV1024
+  jsr writereg
+  
+  ;tft.PWM1out(255);
+  lda #P1DCR
+  ldy #255
+  jsr writereg
+
+  rts
+
+;;; set text colors (actually, either mode) -- fg white, bg black
+;;;
+defaultcolors
+
+  ;; set foreground to white
+  lda #$63
+  ldy #$1f
+  jsr writereg
+
+  lda #$64
+  ldy #$3f
+  jsr writereg
+
+  lda #$65
+  lda #$1f
+  jsr writereg
+
+  ldy#0
+  lda #$60
+  jsr writereg
+  lda #$61
+  jsr writereg
+  lda #$62
+  jsr writereg
+  
+  ;; Clear transparency flag
+  lda #$22
+  jsr wrcommand
+  jsr rddata
+  and #%10111111    ; clear bit 6
+  jsr wrdata
+
+  rts
+
+
+
+ra8875init
+  ;; initialization?
+  ;;
+
+  jsr setup6522     ; set up the port
+  jsr vidinit
+  jsr reginit
+  jsr displayon
+  jsr dotext        ; set text mode
+  jsr docursor      ; turn on cursor
+
+
+DLSTART=$80
+DLSTOP=$00
+DRAWSQUARE=$10
+FILL=$20
+
+
+;;; fill screen with the current foreground color
+;;;
+fillscreen
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy #0
+  jsr writereg
+  ldy #0
+  lda #$92
+  jsr writereg
+  ldy #0
+  lda #$93
+  jsr writereg
+  ldy #0
+  lda #$94
+  jsr writereg
+
+  lda #$95
+  ldy #$1F          ; lower byte for 799
+  jsr writereg
+  lda #$96
+  ldy #03           ; upper byte for 799
+  jsr writereg
+
+  lda #$97
+  ldy #$df          ; lower byte for 479
+  jsr writereg
+  lda #$98          
+  ldy #$01          ; upper byte for 479
+  jsr writereg
+
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+  rts
+
+;;; draw a filled rectangle, presuming that it's already all set up
+fillrect
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+  jsr delay100ms
+  rts
+
+
+;;; fill the screen with the color from the color table specified in
+;;; the accumulator. Set color back to current setting afterwards.
+;;;
+fillcolor
+  sta SCRATCH       ; temporarily store color
+  
+  ;; look up current color values and save them
+  lda #$63
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  lda #$64
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  lda #$65
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  ;; set fg color
+  lda SCRATCH
+;  jsr setfg
+
+  ;; fill screen
+  jsr fillscreen
+  jsr delay100ms    ; BUG should poll register to determine readiness
+
+  ;; reset color
+  pla
+  tay
+  lda #$65
+  jsr writereg
+  pla
+  tay
+  lda #$64
+  jsr writereg
+  pla
+  tay
+  lda #$63
+  jsr writereg
+  rts
+
+
+;;; move to the start of a new line. set horizontal position to zero, and
+;;; increment vertical position by 16. (NOTE: this presumes that we're
+;;; at text size 0.)
+;;;
+donewline
+  ;; first, do the equivalent of a carriage return
+  ldy #0            ; set $2a and $2b, horizontal position, to 0
+  lda #$2b
+  jsr writereg
+  lda #$2a
+  jsr writereg
+
+  ;; second, do the equivalent of a line feed
+  lda #$2d          ; read MSB of vertical position
+  jsr readreg
+  tay               ; cache it in Y
+  lda #$2c          ; read LSB of vertial position
+  jsr readreg
+  clc
+  adc #16           ; add 16
+  pha               ; temporaily store on stack
+  tya               ; get MSB again
+  adc #0            ; process the carry
+  tay               ; write to Y
+  lda #$2d          ; write value of Y to $2d (MSB)
+  jsr writereg
+  ply               ; retreive LSB cached on stack
+  lda #$2c          ; write to LSB register
+  jsr writereg
+  rts
+
+
+;;; clear screen
+;;;
+docls
+  ;; fill the screen with black
+  lda #0            ; color 0 is black
+  jsr fillcolor
+
+  ;; reset the text position
+  ldy #0
+  lda #$2a
+  jsr writereg
+  ldy #0
+  lda #$2b
+  jsr writereg
+  ldy #0
+  lda #$2c
+  jsr writereg
+  lda #$2d
+  ldy #0
+  jsr writereg
+
+  ;; reset the text color (already done?)
+  rts
+
+
+;;; set text mode, text font, text color, and text direction
+;;;
+dotext
+
+  ;; send command 0x40 (MWCR0 register)
+  lda #$40
+  jsr wrcommand
+
+  ;; read response
+  jsr rddata
+  ;; set bit 7
+  ora #$80
+  ;; write it back as data
+  jsr wrdata
+
+  ;; font selection
+  lda #$21
+  jsr wrcommand
+  jsr rddata
+  and #%0101111     ; clear bits 7 and 5
+  jsr wrdata
+
+  jsr defaultcolors
+
+  rts
+
+;;; Turn on hardware cursor
+;;;
+docursor
+  lda #MWCR0
+  jsr wrcommand
+  jsr rddata
+  ora #MWCR0_CURSOR
+  jsr wrdata
+
+  lda #MWCR0
+  jsr wrcommand
+  jsr rddata
+  ora #MWCR0_BLINK
+  jsr wrdata
+
+  lda #BTCR
+  jsr wrcommand
+  lda #32           ; just keep tweaking until I like the result
+  jsr wrdata
+
+  rts
+
+
+dograph
+  lda #MWCR0
+  jsr wrcommand
+  jsr rddata
+  and #127       ; turn off bit 7
+  jsr wrdata
+  rts
+
+
+;;; Do a test text block move using bitblt functions. I think this
+;;; is what I want to use to implement scrolling, so let's do something
+;;; along those lines. Move roughly the bottom two third of the screen
+;;; to the top of the screen, sticking to line-aligned units. There are
+;;; 30 16-bit lines on a 480-line display, so basically I want to move
+;;; (0,160)-(799,470) to (0,0)-(799,320).
+;;;
+domove
+  ;; set up source address
+  ;; NOTE address includes layer specification. I'm setting this
+  ;; to zero, which means Layer 1. I'm not even sure right now which
+  ;; layer I'm using!
+  ldy #0            ; starting at 0, 160
+  lda #$54          ; LSB of X coordinate
+  jsr writereg
+  lda #$55          ; MSB of X coordinate
+  jsr writereg
+  ldy #$A0          
+  lda #$56          ; LSB of Y coordinate
+  jsr writereg
+  ldy #0
+  lda #$57          ; MSB of Y coordinate
+  
+
+  ;; set up destination address
+  ldy #0            ; copying to 0,0
+  lda #$58          ; LSB of X coordinate
+  jsr writereg
+  lda #$59          ; MSB of X coordinate
+  jsr writereg
+  lda #$5A          ; LSB of Y coordinate
+  jsr writereg
+  lda #$5B          ; MSB of Y coordinate
+
+  ;; set BTE width and hight
+  ldy #$20          ; width is 800 ($320)
+  lda #$5C          ; LSB of width
+  jsr writereg
+  ldy #$03
+  lda #$5D          ; MSD of width
+  jsr writereg
+
+
+  ldy #$40          ; height is 340 ($140)
+  lda #$5E          ; LSB of X coordinate
+  jsr writereg
+  ldy #$01
+  lda #$5F          ; MSD of X coordinate
+  jsr writereg
+
+  ;; set BTE function
+  ;; function is "move in a positive direction". The "positive direction"
+  ;; means that we start at the beginning and move toward the end; since
+  ;; the source and destination regions overlap, that's what we need.
+  ;; ROP is "destionation = source" (ie, straight copy).
+  ;; ROP is %1100 = $C, ROP is %0010 = $02
+  ;; result is $C2
+  ldy #$C2
+  lda #$51
+  jsr writereg
+
+  ;; enable BTE function
+  ldy #$80
+  lda #$50
+  jsr writereg
+
+
+  ;; we really need to wait to determine when the operation has
+  ;; has completed. For the moment, ignore this since I'm using a
+  ;; CLI. BUG BUG BUG.
+
+  rts
+
+dofinish
+
+  lda #$63
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  lda #$64
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  lda #$65
+  jsr wrcommand
+  jsr rddata
+  pha
+
+  ;; now set color to black, ready for painting the block
+  ldy #0
+  lda #$63
+  jsr writereg
+  lda #$64
+  jsr writereg
+  lda #$65
+  jsr writereg
+
+  ;; now stage two -- empty bottom third of the screen. region is
+  ;; from ($0, $140) to ($31F, $11F)
+
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy #0
+  jsr writereg
+  ldy #0
+  lda #$92
+  jsr writereg
+  ldy #$40
+  lda #$93
+  jsr writereg
+  ldy #1
+  lda #$94
+  jsr writereg
+
+  lda #$95
+  ldy #$1F          ; lower byte for 799
+  jsr writereg
+  lda #$96
+  ldy #03           ; upper byte for 799
+  jsr writereg
+
+  lda #$97
+  ldy #$df          ; lower byte for 479
+  jsr writereg
+  lda #$98          
+  ldy #$01          ; upper byte for 479
+  jsr writereg
+
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+  ;; add a pause to complete
+  jsr delay100ms
+
+  ;; reset color
+  pla
+  tay
+  lda #$65
+  jsr writereg
+  pla
+  tay
+  lda #$64
+  jsr writereg
+  pla
+  tay
+  lda #$63
+  jsr writereg
+
+  ;; move text cursor
+  ldy #0            ; set $2a and $2b, horizontal position, to 0
+  lda #$2a
+  jsr writereg
+  lda #$2b
+  jsr writereg
+  ldy #$40
+  lda #$2c
+  jsr writereg
+  ldy #1
+  lda #$2d
+  jsr writereg
+
+  rts
+
+
+
+;;; scrollup is basically the text scrolling function that i need
+;;; for "terminal" type interaction. Four steps -- first, some setup
+;;; that I do here so that the block transfer and then erase happen
+;;; as quickly together as possible. Then, do the block transfer to
+;;; move the bottom two thirds of the screen to the top. Next, paint
+;;; a black background in the bottom third. Finally, reset the color
+;;; and move the text position to the newly opened area.
+
+doscrollup
+  ;; set up for move. I do this out of line so that the actual transfer
+  ;; happens as quickly as it can. Look up the current foreground
+  ;; color, cache it on the stack, and set the foreground to black.
+  ;; look up current color values and save them
+  lda #$63
+  jsr readreg
+  pha
+
+  lda #$64
+  jsr readreg
+  pha
+
+  lda #$65
+  jsr readreg
+  pha
+
+  ;; now set color to black, ready for painting the block after the move
+  ldy #0
+  lda #$63
+  jsr writereg
+  lda #$64
+  jsr writereg
+  lda #$65
+  jsr writereg
+
+  ;; setup completed. next, do the block move.
+  jsr domove        ; this is where the block transfer happens
+
+  ;; wait for block transfer to complete. Read register $50 until
+  ;; the top bit is clear.
+.(
+busyloop
+  lda #$50
+  jsr readreg
+  bmi busyloop
+.)
+
+  ;; now, empty bottom third of the screen. region is from
+  ;; ($0, $140) to ($31F, $11F)
+
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy #0
+  jsr writereg
+  ldy #0
+  lda #$92
+  jsr writereg
+  ldy #$40
+  lda #$93
+  jsr writereg
+  ldy #1
+  lda #$94
+  jsr writereg
+
+  lda #$95
+  ldy #$1F          ; lower byte for 799
+  jsr writereg
+  lda #$96
+  ldy #03           ; upper byte for 799
+  jsr writereg
+
+  lda #$97
+  ldy #$df          ; lower byte for 479
+  jsr writereg
+  lda #$98          
+  ldy #$01          ; upper byte for 479
+  jsr writereg
+
+  ;; do the block draw
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+  ;; add a pause to complete
+  jsr delay100ms
+
+  ;; reset color. I should check if there's a way to draw a
+  ;; rectangle using the current *background* color 'cos that
+  ;; would be a lot easier!
+  pla
+  tay
+  lda #$65
+  jsr writereg
+  pla
+  tay
+  lda #$64
+  jsr writereg
+  pla
+  tay
+  lda #$63
+  jsr writereg
+
+  ;; move text cursor
+  ldy #0            ; set $2a and $2b, horizontal position, to 0
+  lda #$2a
+  jsr writereg
+  lda #$2b
+  jsr writereg
+  ldy #$40
+  lda #$2c
+  jsr writereg
+  ldy #1
+  lda #$2d
+  jsr writereg
+
+  rts
+
+
+;;;
+;;; SECTION 6: Various utility routines
+;;;
+;;;
+
+
+;;;
+;;; get a character code via serial port, left in the accumulator
+;;;
+geta
+.(
+wait_rxd_empty
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_empty
+  lda ACIA_DATA
+.)
+  rts
+

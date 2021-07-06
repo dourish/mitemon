@@ -185,8 +185,7 @@ loop3
   jsr delay200us
   dec SCRATCH+1
   bne loop3
-  beq next          ; 3 cycles
-next
+
   jsr delay50us
   jsr delay50us
   jsr delay50us
