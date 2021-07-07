@@ -259,119 +259,121 @@ setup6522
   rts
 
 
-;;; Send a byte via SPI. This is a much faster version, which turns
-;;; on the fact that the INC that clocks the output can also trigger
-;;; an input tested via the N flag. It also basically precomputes
+;;; Send a byte via SPI. This is a much faster version, which precomputes
 ;;; the two configurations for the output register (one with MOSI high
 ;;; and one with MOSI low) and keeps them in X and Y. Jeff's version
 ;;; loops, but this version unrolls the loop... although I realize now
 ;;; that, since I still need the BRA, this doesn't save me much.
 sendbyte
-  phx
+.(
+phx
   phy
   ldy #SPI_MOSI|RESET  ; constant -- clk 0, mosi 1.
   ldx #RESET        ; another constant -- clk 0, mosi 0, reset high
 
-  asl a             ; top bit of a into carry
-  bcs biy7_1
-  stx port          ; set ck 0, mosi 0
-  inc port          ; then clk 1
+  asl             ; top bit of a into carry
+  bcs bit7_1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
   bra bit6
 
 bit7_1
-  sty port          ; updates both ck and mosi
-  inc port          ; set clock
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
 bit6
-  asl a
+  asl
   bcs bit6_1
 
-  stx port          ; set ck 0, mosi 0
-  inc port          ; then clk 1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
   bra bit5
 
 bit6_1
-  sty port          ; updates both ck and mosi
-  inc port          ; set clock
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
 bit5
-  asl a
+  asl
   bcs bit5_1
 
-  stx port          ; set ck 0, mosi 0
-  inc port          ; then clk 1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
   bra bit4
 
 bit5_1
-  sty port          ; updates both ck and mosi
-  inc port          ; set clock
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
 bit4
-  asl a
+  asl
   bcs bit4_1
 
-  stx port          ; set ck 0, mosi 0
-  inc port          ; then clk 1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
   bra bit3
 
 bit4_1
-  sty port          ; updates both ck and mosi
-  inc port          ; set clock
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
 bit3
-  asl a
+  asl
   bcs bit3_1
 
-  stx port          ; set ck 0, mosi 0
-  inc port          ; then clk 1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
   bra bit2
 
 bit3_1
-  sty port          ; updates both ck and mosi
-  inc port          ; set clock
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
 bit2
-  asl a
+  asl
   bcs bit2_1
 
-  stx port          ; set ck 0, mosi 0
-  inc port          ; then clk 1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
   bra bit1
 
 bit2_1
-  sty port          ; updates both ck and mosi
-  inc port          ; set clock
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
 bit1
-  asl a
+  asl
   bcs bit1_1
 
-  stx port          ; set ck 0, mosi 0
-  inc port          ; then clk 1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
   bra bit0
 
 bit1_1
-  sty port          ; updates both ck and mosi
-  inc port          ; set clock
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
 bit0
-  asl a
+  asl
   bcs bit0_1
 
-  stx port          ; set ck 0, mosi 0
-  inc port          ; then clk 1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
   bra sent
 
 bit0_1
-  sty port          ; updates both ck and mosi
-  inc port          ; set clock
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
 sent
-  stx port          ; leave clk low, MOSI high
+  stx SPI_PORT          ; leave clk low, MOSI high
   ply
   plx
   rts
+.)
 
+
+#if 0
 ;;; Send a byte via SPI. This faster version of the original code
 ;;; unrolls the loop and relies on shifts rather than branches to
 ;;; determine the bit to send. This is written on the assumption
@@ -505,6 +507,7 @@ sendbyte
 
   ply
   rts
+#endif
 
 
 getresponse
@@ -522,6 +525,121 @@ timedout
   rts
 .)
 
+;;; A faster SPI read routine, courtesy of Jeff Laughton (DrJeffyl).
+;;; The hack it relies upon is that clocking the bus using INC also
+;;; essentially does a read, since we know that the N flag will be
+;;; set according to the top bit of the port, which means we don't
+;;; even need to do a comparison. It also uses the same precomputing
+;;; tric as the output routine.
+recv8bits
+.(
+phy
+  ldy #RESET
+
+bit7
+  sty SPI_PORT      ; clk low, mosi low, reset high
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit7_0
+
+  sec
+  rol
+  bra bit6
+
+bit7_0
+  asl
+
+bit6
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit6_0
+
+  sec
+  rol
+  bra bit5
+
+bit6_0
+  asl
+
+bit5
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit5_0
+
+  sec
+  rol
+  bra bit4
+
+bit5_0
+  asl
+
+bit4
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit4_0
+
+  sec
+  rol
+  bra bit3
+
+bit4_0
+  asl
+
+bit3
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit3_0
+
+  sec
+  rol
+  bra bit2
+
+bit3_0
+  asl
+
+bit2
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit2_0
+
+  sec
+  rol
+  bra bit1
+
+bit2_0
+  asl
+
+bit1
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit1_0
+
+  sec
+  rol
+  bra bit0
+
+bit1_0
+  asl
+
+bit0
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit0_0
+
+  sec
+  rol
+  bra endread
+
+bit0_0
+  asl
+
+endread
+  dec SPI_PORT
+  ply
+  rts
+.)
+
+
+#if 0
 ;;; read a byte via SPI from SPI_PORT, returned in accumulator.
 ;;; Assume the CLK idles low.
 recv8bits
@@ -578,7 +696,7 @@ recv8bits
 
   plx               ; restore X
   rts               ; return with data in A
-
+#endif
 
 ;;;
 ;;; SECTION 2: Read and set RA8875 registers
