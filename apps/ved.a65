@@ -2317,15 +2317,15 @@ donedigit
   rts
 .)
 
-cls
-  lda #$1B  ; esc
-  jsr ROMPUTCH
-  lda #$5B  ; "["
-  jsr ROMPUTCH
-  lda #$32  ; "2"
-  jsr ROMPUTCH
-  lda #$4A  ; "J"
-  jsr ROMPUTCH
+;cls
+;  lda #$1B  ; esc
+;  jsr ROMPUTCH
+;  lda #$5B  ; "["
+;  jsr ROMPUTCH
+;  lda #$32  ; "2"
+;  jsr ROMPUTCH
+;  lda #$4A  ; "J"
+;  jsr ROMPUTCH
   rts
 
 home
@@ -3689,6 +3689,7 @@ donewline
 
 ;;; clear screen
 ;;;
+cls
 docls
   ;; fill the screen with black
   lda #0            ; color 0 is black
