@@ -315,11 +315,8 @@ nolimit
 
   ldy #0
 copydata
-;  lda #"2
-;  jsr vputa
 
   lda (BUFPTR),y
-;  jsr vputa
   sta (DATAPTR),y
   iny
   cmp #$0A          ; $A = LF = end-of-line marker
@@ -333,8 +330,6 @@ copydata
   jmp endofdata
 
 endofline  
-;  lda #"3
-;  jsr vputa
 ;  jsr crlf
 
   ;; update BUFPTR
@@ -380,8 +375,6 @@ continue
   jmp loadline
 
 endofbuffer
-;  lda #"5
-;  jsr vputa
 
   sty SCRATCH       ; cache Y in SCRATCH, we need it a couple of times
 
@@ -458,65 +451,8 @@ endofbuffer
   jmp copyline
 
 endofdata
-;  lda #"6
-;  jsr vputa
 
 finish
-  ;; for debugging, print what we've read
-
-#if 0
-  jsr crlf
-
-  lda FIRSTLINE
-  sta CURLINE
-  lda FIRSTLINE+1
-  sta CURLINE+1
-
-printline
-;  lda CURLINE+1
-;  jsr putax
-;  lda CURLINE
-;  jsr putax
-;  jsr ROMGET
-;  cmp #"q
-;  beq doneprint
-;  jsr crlf
-
-  ldy #4
-printloop
-  lda (CURLINE),y
-  jsr vputa
-  cmp #$0A
-  beq finishline
-  iny
-  cpy #80
-  beq doneline
-  bra printloop
-
-finishline
-  lda #$0D
-  jsr vputa
-doneline
-  ldy #1
-  lda (CURLINE)
-  sta SCRATCH
-  lda (CURLINE),y
-  sta SCRATCH+1
-
-  lda SCRATCH
-  ora SCRATCH+1
-  beq doneprint
-
-  lda SCRATCH
-  sta CURLINE
-  lda SCRATCH+1
-  sta CURLINE+1
-
-  bra printline  
-
-doneprint
-#endif
-
   ;; file loading is complete. start the editor.
   jmp editstart
 
@@ -754,6 +690,7 @@ endpaint
 ;;; repaint the whole screen, saving and then restoring cursor position
 ;;;
 repaint
+
   lda row
   pha
   lda col
@@ -861,18 +798,12 @@ prtmessage
   lda #1
   sta col
   jsr moveto
+  jsr clrtoend
   pla
   sta col
   pla
   sta row
 
-;  lda #$48  ; H
-;  jsr ROMPUTCH
-;  lda #$1B ; ESC    ; ESC-[K clears to end of line
-;  jsr ROMPUTCH
-;  lda #$5B ; [
-;  jsr ROMPUTCH
-;  lda #"K
 
   phy
   ldy #0
@@ -889,27 +820,20 @@ done
 .)
 
 clrmessage
-  lda #$1B ; ESC
-  jsr ROMPUTCH
-  lda #$5B ; [
-  jsr ROMPUTCH
+  lda row
+  pha
+  lda col
+  pha
   lda #24
-  jsr todecimal
-  lda #$3B  ; semic
-  jsr ROMPUTCH
+  sta row
   lda #1
-  jsr todecimal
-  lda #$48  ; H
-  jsr ROMPUTCH
-  lda #$1B ; ESC    ; ESC-[K clears to end of line
-  jsr ROMPUTCH
-  lda #$5B ; [
-  jsr ROMPUTCH
-  lda #"K
-  jsr ROMPUTCH
-  jsr moveto
+  sta col
+  jsr clrtoend
+  pla
+  sta col
+  pla
+  sta row
   rts
-
 
 ;;;
 ;;; *** EDITOR COMMANDS
@@ -925,7 +849,7 @@ insert
 inschar
   pla
   sta (CURDATA),y
-  jsr ROMPUTCH
+  jsr vputa
   iny
   lda #$0A
   sta (CURDATA),y
@@ -999,7 +923,8 @@ undefined
   jmp editloop
 
 ;;; delete character forward. remove character under the cursor unless
-;;; we are at the end of the line
+;;; we are at the end of the line. note that delete-backward also uses
+;;; this code after resetting text position
 delfwd
 .(
   stz PRISTINE
@@ -1020,12 +945,12 @@ delloop
   beq done
   cmp #$0A
   beq done
-  jsr ROMPUTCH
+  jsr vputa
   iny
   bra delloop
 done
   lda #32           ; space
-  jsr ROMPUTCH
+  jsr vputa
   jsr moveto        ; restore original cursor position
 nodelete
   jmp editloop
@@ -1130,7 +1055,7 @@ clearloop
   lda #0
   sta (CURDATA),y
   lda #32
-  jsr ROMPUTCH
+  jsr vputa
   cpy #MAXCOL
   beq endclear
   iny
@@ -2317,24 +2242,7 @@ donedigit
   rts
 .)
 
-;cls
-;  lda #$1B  ; esc
-;  jsr ROMPUTCH
-;  lda #$5B  ; "["
-;  jsr ROMPUTCH
-;  lda #$32  ; "2"
-;  jsr ROMPUTCH
-;  lda #$4A  ; "J"
-;  jsr ROMPUTCH
-  rts
-
 home
-;  lda #$1B  ; esc
-;  jsr ROMPUTCH
-;  lda #$5B  ; [
-;  jsr ROMPUTCH
-;  lda #$48  ; H
-;  jsr ROMPUTCH
   ldy #0
   lda #$2a
   jsr writereg
@@ -2351,31 +2259,109 @@ home
   rts
 
 clrtoend
-  lda #$1B  ; ESC
-  jsr ROMPUTCH
-  lda #$5B  ; [
-  jsr ROMPUTCH
-  lda #$30  ; 0
-  jsr ROMPUTCH
-  lda #$4A ; H
-  jsr ROMPUTCH
+  ;; paint a black rectangle over the current line area, starting
+  ;; at current text position and extending to the end of the line
+
+  ;; take COL and multiply by 8 for startx
+  stz SCRATCH+1
+  lda col
+  asl
+  rol SCRATCH+1
+  asl
+  rol SCRATCH+1
+  asl
+  rol SCRATCH+1
+  sta SCRATCH
+
+  tay
+  lda #$91
+  jsr writereg
+  ldy SCRATCH+1
+  lda #$92
+  jsr writereg
+
+  ;; take ROW and multiply by 16 for starty
+  stz SCRATCH+3
+  lda row
+  asl
+  rol SCRATCH+3
+  asl
+  rol SCRATCH+3
+  asl
+  rol SCRATCH+3
+  asl
+  rol SCRATCH+3
+  sta SCRATCH+2
+
+  tay
+  lda #$93
+  jsr writereg
+  ldy SCRATCH+3
+  lda #$94
+  jsr writereg
+
+  ;; endx is right side of screen
+  ldy #$1b
+  lda #$95
+  jsr writereg
+  ldy #$03
+  lda #$96
+  jsr writereg
+
+  ;; endy is starty plus char height (16)
+  clc
+  lda SCRATCH+2
+  adc #$10
+  sta SCRATCH+2
+  lda SCRATCH+3
+  adc #0
+  sta SCRATCH+3
+
+  tay
+  lda #$98
+  jsr writereg
+  ldy SCRATCH+2
+  lda #$97
+  jsr writereg
+
+  ;; set color to black
+  ldy #0
+  lda #$63
+  jsr writereg
+  lda #$64
+  jsr writereg
+  lda #$65
+  jsr writereg
+
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr readreg
+  bmi busyloop
+.)
+
+  ;; set color back to white
+  ldy #$1f
+  lda #$63
+  jsr writereg
+  lda #$65
+  jsr writereg
+  ldy #$3f
+  lda #$64
+  jsr writereg
+
   rts
 
 moveto
-;  lda #$1B ; ESC
-;  jsr ROMPUTCH
-;  lda #$5B ; [
-;  jsr ROMPUTCH
-;  lda row  ; row
-;  inc               ; code counts from 0, terminal counts from 1
-;  jsr todecimal
-;  lda #$3B  ; semic
-;  jsr ROMPUTCH
-;  lda col  ; col
-;  inc               ; code counts from 0, terminal counts from 1
-;  jsr todecimal
-;  lda #$48  ; H
-;  jsr ROMPUTCH
   ;; take COL and multiply by 8 for horizontal position
   stz SCRATCH+1
   lda col
@@ -2385,7 +2371,7 @@ moveto
   rol SCRATCH+1
   asl
   rol SCRATCH+1
-  tya
+  tay
   
   lda #$2a
   jsr writereg
@@ -2404,7 +2390,7 @@ moveto
   rol SCRATCH+1
   asl
   rol SCRATCH+1
-  tya
+  tay
 
   lda #$2c
   jsr writereg
@@ -2827,7 +2813,7 @@ endchar
   rts
 
 
-putax
+putaxserial
 .(
   phy
 
@@ -2861,12 +2847,6 @@ wait_txd_empty2
   ply
   rts
 
-crlf
-  lda #13
-  jsr ROMPUTA
-  lda #10
-  jsr ROMPUTA
-  rts
 
 
 startstr:   .byte "xmodem listening", $0d, $0a, $00
@@ -2945,139 +2925,115 @@ setup6522
   rts
 
 
-;;; Send a byte via SPI. This faster version of the original code
-;;; unrolls the loop and relies on shifts rather than branches to
-;;; determine the bit to send. This is written on the assumption
-;;; that the CLK signal idles low.
+;;; Send a byte via SPI. Version adapted from Jeff Laughton.
 ;;;
 sendbyte
+.(
+  phx
   phy
-  ;tay               ; y will store the data as we transmit it
+  ldy #SPI_MOSI|RESET  ; constant -- clk 0, mosi 1.
+  ldx #RESET        ; another constant -- clk 0, mosi 0, reset high
 
-; bit 7
-  ;tya
-  asl               ; moves bit to transmit into C (2 cycles)
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #2            ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
-  ;; NOTE used to have "dec SPI_PORT" right after the inc but I
-  ;; moved it down to even out the duty cycle. I strongly suspect
-  ;; that this is completely irrelevant. Once everything is working,
-  ;; try moving it back since the code reads better in its original
-  ;; configuration.
+  asl             ; top bit of a into carry
+  bcs bit7_1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit6
 
-; bit 6
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit7_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
-; bit 5
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit6
+  asl
+  bcs bit6_1
 
-; bit 4
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit5
 
-; bit 3
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit6_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
-; bit 2
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit5
+  asl
+  bcs bit5_1
 
-; bit 1
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit4
 
-; bit 0
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit5_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
-  ;; set MOSI high at end
-  lda #SPI_MOSI
-  tsb SPI_PORT
+bit4
+  asl
+  bcs bit4_1
 
-  dec SPI_PORT      ; 6 cycles
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit3
 
+bit4_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+bit3
+  asl
+  bcs bit3_1
+
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit2
+
+bit3_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+bit2
+  asl
+  bcs bit2_1
+
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit1
+
+bit2_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+bit1
+  asl
+  bcs bit1_1
+
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit0
+
+bit1_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+bit0
+  asl
+  bcs bit0_1
+
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra sent
+
+bit0_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+sent
+  sty SPI_PORT          ; leave clk low, MOSI high
   ply
+  plx
   rts
+.)
 
 
 getresponse
@@ -3098,59 +3054,112 @@ timedout
 ;;; read a byte via SPI from SPI_PORT, returned in accumulator.
 ;;; Assume the CLK idles low.
 recv8bits
-  phx               ; store X, since we'll use it (and can't use Y)
-  lda #0            ; zero out initial result
+.(
+phy
+  ldy #RESET
 
-  inc SPI_PORT      ; set CLK high for first bit
-  ldx SPI_PORT      ; read data
-  cpx #128          ; this sets carry flag to top bit
-  rol               ; shift carry into A
-  dec SPI_PORT      ; set clock off
+bit7
+  sty SPI_PORT      ; clk low, mosi low, reset high
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit7_0
 
-  inc SPI_PORT      ; set CLK high #2
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+  sec
+  rol
+  bra bit6
 
-  inc SPI_PORT      ; set CLK high #3
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+bit7_0
+  asl
 
-  inc SPI_PORT      ; set CLK high #4
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+bit6
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit6_0
 
-  inc SPI_PORT      ; set CLK high #5
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+  sec
+  rol
+  bra bit5
 
-  inc SPI_PORT      ; set CLK high #6
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+bit6_0
+  asl
 
-  inc SPI_PORT      ; set CLK high #7
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+bit5
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit5_0
 
-  inc SPI_PORT      ; set CLK high #8
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+  sec
+  rol
+  bra bit4
 
-  plx               ; restore X
-  rts               ; return with data in A
+bit5_0
+  asl
+
+bit4
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit4_0
+
+  sec
+  rol
+  bra bit3
+
+bit4_0
+  asl
+
+bit3
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit3_0
+
+  sec
+  rol
+  bra bit2
+
+bit3_0
+  asl
+
+bit2
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit2_0
+
+  sec
+  rol
+  bra bit1
+
+bit2_0
+  asl
+
+bit1
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit1_0
+
+  sec
+  rol
+  bra bit0
+
+bit1_0
+  asl
+
+bit0
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit0_0
+
+  sec
+  rol
+  bra endread
+
+bit0_0
+  asl
+
+endread
+  dec SPI_PORT
+  ply
+  rts
+.)
+
 
 
 ;;;
@@ -3558,6 +3567,7 @@ FILL=$20
 ;;; fill screen with the current foreground color
 ;;;
 fillscreen
+
   ;; set up parameters -- startx, starty, endx, endy
   lda #$91
   ldy #0
@@ -3593,6 +3603,15 @@ fillscreen
   jsr wrdata
   lda #DLSTART|FILL|DRAWSQUARE
   jsr wrdata
+
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr readreg
+  bmi busyloop
+.)
+
   rts
 
 ;;; draw a filled rectangle, presuming that it's already all set up
@@ -3605,8 +3624,58 @@ fillrect
   lda #DLSTART|FILL|DRAWSQUARE
   jsr wrdata
 
-  jsr delay100ms
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr readreg
+  bmi busyloop
+.)
+
   rts
+
+;;; set foreground color to values from color table indexed by A
+;;;
+setfg
+  sta SCRATCH       ; cache A then multiply by 3
+  asl               ; = *2
+  clc
+  adc SCRATCH       ; = *3
+  sta SCRATCH       ; store it because I can't rely on Y
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$63          ; register to A
+  jsr writereg      ; store Y in A
+  inc SCRATCH       ; move on to next value
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$64          ; register to A
+  jsr writereg      ; store Y in A
+  inc SCRATCH       ; move on to next value
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$65          ; register to A
+  jsr writereg      ; store Y in A
+
+  rts
+
+colors
+  .byte $00, $00, $00    ; black
+  .byte $1F, $00, $00    ; red
+  .byte $00, $3F, $00    ; green
+  .byte $00, $00, $1F    ; blue
+  .byte $00, $3F, $1F    ; cyan
+  .byte $1F, $00, $1F    ; magenta
+  .byte $1F, $3F, $00    ; yellow
+  .byte $1F, $3F, $1F    ; white
+  .byte $0F, $1F, $0F    ; grey
+  .byte $1D, $18, $15    ; pink?
 
 
 ;;; fill the screen with the color from the color table specified in
@@ -3633,11 +3702,17 @@ fillcolor
 
   ;; set fg color
   lda SCRATCH
-;  jsr setfg
+  jsr setfg
 
   ;; fill screen
   jsr fillscreen
-  jsr delay100ms    ; BUG should poll register to determine readiness
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr readreg
+  bmi busyloop
+.)
 
   ;; reset color
   pla
@@ -3652,6 +3727,7 @@ fillcolor
   tay
   lda #$63
   jsr writereg
+
   rts
 
 
@@ -4080,6 +4156,18 @@ wait_rxd_empty
   and #$08
   beq wait_rxd_empty
   lda ACIA_DATA
+.)
+  rts
+
+putserial
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
 .)
   rts
 
