@@ -33,7 +33,7 @@ KILLBUFFER=$7F82    ; upper half of FORTH input buffer
 ;;; long; two bytes of forward pointer, two bytes of backwards pointer,
 ;;; and 80 bytes of character data. I use the term "lines" to refer to
 ;;; these data structures, and "row" and "column" to refer to screen
-;;; space. The line data structures are allocatd in an area from DATASTART
+;;; space. The line data structures are allocated in an area from DATASTART
 ;;; to DATAEND. NEXTFREE points to the next available space. FIRSTLINE
 ;;; and LASTLINE indicate the first and last lines of the text file.
 ;;;
@@ -1579,6 +1579,15 @@ lineaftersub
   ldy #4
   lda #$0A
   sta (NEXTFREE),y
+
+  ;; if the current line is the last line, then we need to extend
+  ;; LASTLINE to point to the new line.
+  lda CURLINE
+  cmp LASTLINE
+  bne notlast
+  lda CURLINE+1
+  cmp LASTLINE+1
+  bne notlast
 
   lda NEXTFREE
   sta LASTLINE
@@ -3835,6 +3844,13 @@ docursor
   lda #32           ; just keep tweaking until I like the result
   jsr wrdata
 
+  ldy #$07
+  lda #$4e          ; cursor horizontal size
+  jsr writereg
+  ldy #$0f
+  lda #$4f          ; cursor vertical size
+  jsr writereg
+
   rts
 
 
@@ -4018,126 +4034,6 @@ dofinish
   rts
 
 
-
-;;; scrollup is basically the text scrolling function that i need
-;;; for "terminal" type interaction. Four steps -- first, some setup
-;;; that I do here so that the block transfer and then erase happen
-;;; as quickly together as possible. Then, do the block transfer to
-;;; move the bottom two thirds of the screen to the top. Next, paint
-;;; a black background in the bottom third. Finally, reset the color
-;;; and move the text position to the newly opened area.
-
-doscrollup
-  ;; set up for move. I do this out of line so that the actual transfer
-  ;; happens as quickly as it can. Look up the current foreground
-  ;; color, cache it on the stack, and set the foreground to black.
-  ;; look up current color values and save them
-  lda #$63
-  jsr readreg
-  pha
-
-  lda #$64
-  jsr readreg
-  pha
-
-  lda #$65
-  jsr readreg
-  pha
-
-  ;; now set color to black, ready for painting the block after the move
-  ldy #0
-  lda #$63
-  jsr writereg
-  lda #$64
-  jsr writereg
-  lda #$65
-  jsr writereg
-
-  ;; setup completed. next, do the block move.
-  jsr domove        ; this is where the block transfer happens
-
-  ;; wait for block transfer to complete. Read register $50 until
-  ;; the top bit is clear.
-.(
-busyloop
-  lda #$50
-  jsr readreg
-  bmi busyloop
-.)
-
-  ;; now, empty bottom third of the screen. region is from
-  ;; ($0, $140) to ($31F, $11F)
-
-  ;; set up parameters -- startx, starty, endx, endy
-  lda #$91
-  ldy #0
-  jsr writereg
-  ldy #0
-  lda #$92
-  jsr writereg
-  ldy #$40
-  lda #$93
-  jsr writereg
-  ldy #1
-  lda #$94
-  jsr writereg
-
-  lda #$95
-  ldy #$1F          ; lower byte for 799
-  jsr writereg
-  lda #$96
-  ldy #03           ; upper byte for 799
-  jsr writereg
-
-  lda #$97
-  ldy #$df          ; lower byte for 479
-  jsr writereg
-  lda #$98          
-  ldy #$01          ; upper byte for 479
-  jsr writereg
-
-  ;; do the block draw
-  lda #DCR
-  jsr wrcommand
-  
-  lda #DLSTOP|DRAWSQUARE
-  jsr wrdata
-  lda #DLSTART|FILL|DRAWSQUARE
-  jsr wrdata
-
-  ;; add a pause to complete
-  jsr delay100ms
-
-  ;; reset color. I should check if there's a way to draw a
-  ;; rectangle using the current *background* color 'cos that
-  ;; would be a lot easier!
-  pla
-  tay
-  lda #$65
-  jsr writereg
-  pla
-  tay
-  lda #$64
-  jsr writereg
-  pla
-  tay
-  lda #$63
-  jsr writereg
-
-  ;; move text cursor
-  ldy #0            ; set $2a and $2b, horizontal position, to 0
-  lda #$2a
-  jsr writereg
-  lda #$2b
-  jsr writereg
-  ldy #$40
-  lda #$2c
-  jsr writereg
-  ldy #1
-  lda #$2d
-  jsr writereg
-
-  rts
 
 
 ;;;
