@@ -27,6 +27,15 @@ KILLLINE=$7F80      ; and 7F81
 KILLBUFFER=$7F82    ; upper half of FORTH input buffer
 
 
+;;; vputa writes a character safely. that requires four bytes to be
+;;; sent over SPI -- COMMAND, MRWC, DATA, and then the character.
+;;; however, if we know that the MRWC register is already set, we
+;;; can reduce that just to DATA and the character. Essentially,
+;;; we just call wrdata and save ourselves a lot of faffing around.
+;;; one downside is that fastvputa (ie wrdata) does not preserve A.
+fastvputa=wrdata
+
+
 ;;; Data structures/Rationale
 ;;;
 ;;; Text data is held in a doubly-linked list of lines. Each is 84 bytes
@@ -628,13 +637,15 @@ arrowleft
 paintrow
 .(
   phy
+  lda #MRWC         ; set up text write register
+  jsr wrcommand
   ldy #4
 rdyloop
   lda (lower),y
   beq done
   cmp #$0A
   beq done
-  jsr vputa
+  jsr fastvputa     ; fast call doesn't set register each time
   iny
   cpy #MAXCOL
   beq done
@@ -735,9 +746,11 @@ addstatus
   jsr moveto
 statusloop
   lda #"-
-  jsr vputa
-  jsr vputa
-  jsr vputa
+  jsr fastvputa
+  lda #"-
+  jsr fastvputa
+  lda #"-
+  jsr fastvputa
   lda PRISTINE
   bne step2
   lda #"*
@@ -748,24 +761,24 @@ step2a
   jsr vputa
   jsr vputa
   lda #"-
-  jsr vputa
+  jsr fastvputa
   lda #32
-  jsr vputa
+  jsr fastvputa
 step3
   ldy #1
 step4
   lda WORD,y
-  jsr vputa
+  jsr fastvputa
   iny
   cpy WORD
   bne step4
 step5
   lda #32
-  jsr vputa
-  lda #"-
+  jsr fastvputa
   ldy #5
 step5a
-  jsr vputa
+  lda #"-           ; need this inside the loop for fastvputa
+  jsr fastvputa     ; it is still faster than using vputa
   dey
   bne step5a
 step6
@@ -776,13 +789,13 @@ step6
   jsr moveto
 step7
   ldy #14
-  lda #"-
 step7a
-  jsr vputa
+  lda #"-
+  jsr fastvputa     ; see comment above
   dey
   bne step7a
-  lda #$2b  ; +
-  jsr vputa
+  lda #$2b  ; +     ; marker at column 80
+  jsr fastvputa
   pla
   sta col
   pla
@@ -808,11 +821,13 @@ prtmessage
 
 
   phy
+  lda #MRWC
+  jsr wrcommand
   ldy #0
 loop
   lda (PRINTVEC),y
   beq done
-  jsr vputa
+  jsr fastvputa
   iny
   bne loop
 done
@@ -939,6 +954,8 @@ delfwd
   ;; not at end of line, so go through the line moving everything
   ;; back
 delloop
+  lda #MRWC
+  jsr wrcommand
   iny
   lda (CURDATA),y
   dey
@@ -947,12 +964,12 @@ delloop
   beq done
   cmp #$0A
   beq done
-  jsr vputa
+  jsr fastvputa
   iny
   bra delloop
 done
   lda #32           ; space
-  jsr vputa
+  jsr fastvputa
   jsr moveto        ; restore original cursor position
 nodelete
   jmp editloop
@@ -1048,6 +1065,8 @@ nocopy
 .)
   ;; delete to the end of the line, erasing as we go with spaces
 
+  lda #MRWC
+  jsr wrcommand
   ldy col
 .(
 clearloop
@@ -1058,7 +1077,7 @@ clearloop
   lda #0
   sta (CURDATA),y
   lda #32
-  jsr vputa
+  jsr fastvputa
   cpy #MAXCOL
   beq endclear
   iny
@@ -2773,13 +2792,10 @@ replacestr .byte "Replace existing file? ", $00
 createmsg  .byte "Creating new file", $0a, $0d, $00
 
 
+;;; write a character to the video screen. Fuller versions of
+;;; this code handle carriage returns, backspace, etc, but we
+;;; do not need those in the editor, so I have removed them.
 vputa
-;  cmp #$0d          ; carriage return
-;  beq vcr
-;  cmp #$0a          ; line feed
-;  beq vlf
-;  cmp #$08          ; backspace
-;  beq vbs
 
   ;; with the special cases out of the way, just display
   ;; the character.
@@ -2791,19 +2807,9 @@ vputa
   tya
   jsr wrdata
   ply
-;  inc VCOL
-;  lda VCOL          ; have we run off the end of the line?
-;  cmp #100
-;  bne endchar       ; no, so continue
-;  stz VCOL          ; yes -- update column
-;  inc VROW
-;  lda VROW          ; were we on the last row
-;  cmp #30
-;  beq scroll        ; yes, so scroll screen up
 endchar
   pla
   rts
-
 
 putaxserial
 .(
@@ -3208,9 +3214,6 @@ wrcommand
 
 wrdata
   pha
-;  ;; set CS low
-;  lda #SPI_CS
-;  trb SPI_PORT
   lda #RESET        ; everything low except RESET
   ;; send DATAWRITE
   lda #DATAWRITE
@@ -3218,12 +3221,6 @@ wrdata
   pla
   ;; send A
   jsr sendbyte
-;  ;; set MOSI high
-;  lda #SPI_MOSI
-;  tsb SPI_PORT
-;  ;; set CS high
-;  lda #SPI_CS
-;  tsb SPI_PORT
   lda #SPI_MOSI|SPI_CS|RESET   ; CS, MOSI, RESET high
   sta SPI_PORT
   rts
