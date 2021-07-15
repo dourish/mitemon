@@ -744,6 +744,8 @@ addstatus
   lda #1
   sta col
   jsr moveto
+  lda #MRWC
+  jsr wrcommand
 statusloop
   lda #"-
   jsr fastvputa
@@ -777,8 +779,10 @@ step5
   jsr fastvputa
   ldy #5
 step5a
-  lda #"-           ; need this inside the loop for fastvputa
-  jsr fastvputa     ; it is still faster than using vputa
+  ;; keep this LDA inside the loop for fastvputa. It's slower than
+  ;; outside the loop but still faster than using vputa.
+  lda #"-
+  jsr fastvputa
   dey
   bne step5a
 step6
@@ -787,11 +791,13 @@ step6
   lda #65
   sta col
   jsr moveto
+  lda #MRWC
+  jsr wrcommand
 step7
   ldy #14
 step7a
   lda #"-
-  jsr fastvputa     ; see comment above
+  jsr fastvputa     ; see comment above re LDA inside the loop
   dey
   bne step7a
   lda #$2b  ; +     ; marker at column 80
