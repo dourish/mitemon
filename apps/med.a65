@@ -1656,6 +1656,15 @@ lineaftersub
   lda #$0A
   sta (NEXTFREE),y
 
+  ;; if the current line is the last line, then we need to extend
+  ;; LASTLINE to point to the new line.
+  lda CURLINE
+  cmp LASTLINE
+  bne notlast
+  lda CURLINE+1
+  cmp LASTLINE+1
+  bne notlast
+
   lda NEXTFREE
   sta LASTLINE
   lda NEXTFREE+1
