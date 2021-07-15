@@ -70,8 +70,10 @@ MAXBUF      .byte 0
 MAXDATA     .byte 0
 SCREENSTART .word 0 ; points to line structure for first line on screen
 
-NROWS=24
+NROWS=30
 MAXROW=NROWS-3
+STATUSROW=NROWS-2
+MSGROW=NROWS-1
 SCROLLROW=MAXROW
 SENTINELROW=MAXROW+1
 NCOLS=80
@@ -726,7 +728,7 @@ addstatus
   pha
   lda col
   pha
-  lda #23
+  lda #STATUSROW
   sta row
   lda #1
   sta col
@@ -767,7 +769,7 @@ step5a
   dey
   bne step5a
 step6
-  lda #23
+  lda #STATUSROW
   sta row
   lda #65
   sta col
@@ -793,7 +795,7 @@ prtmessage
   pha
   lda col
   pha
-  lda #24
+  lda #MSGROW
   sta row
   lda #1
   sta col
@@ -824,7 +826,7 @@ clrmessage
   pha
   lda col
   pha
-  lda #24
+  lda #MSGROW
   sta row
   lda #1
   sta col
@@ -1012,6 +1014,7 @@ donothing
 delline
   stz PRISTINE
   lda (CURDATA)     ; is the line empty?
+  beq closeline
   cmp #$0A
   beq closeline     ; yes, so close it up
 
@@ -1998,11 +2001,11 @@ donebackword
 
 nextpage
 .(
-  ;; reset SCREENSTART forward by about 20 lines
+  ;; reset SCREENSTART forward by a few less than the number of
+  ;; text lines
   phx
 
-  ldx #NROWS
-  dex
+  ldx #MAXROW
   dex
 
   lda SCREENSTART
@@ -2053,8 +2056,63 @@ endloop
   jmp repaint
 .)
 
+;;; as with nextpage, only backwards
 prevpage
-  jmp editloop
+.(
+  ;; reset SCREENSTART backwards by a few less than the number of
+  ;; text lines
+  phx
+
+  ldx #MAXROW
+  dex
+
+  lda SCREENSTART
+  sta SCRATCH
+  lda SCREENSTART+1
+  sta SCRATCH+1
+
+lineloop
+  ;; is there previous line? look at back pointer
+  ldy #2
+  lda (SCRATCH),y
+  iny
+  ora (SCRATCH),y
+  beq endloop
+
+  lda (SCRATCH),y
+  pha
+  dey
+  lda (SCRATCH),y
+  sta SCRATCH
+  pla
+  sta SCRATCH+1
+
+  dex
+  bne lineloop
+endloop
+  plx
+
+  lda SCRATCH
+  sta SCREENSTART
+  lda SCRATCH+1
+  sta SCREENSTART+1
+  stz row
+  stz col
+
+  lda SCREENSTART
+  sta CURLINE
+  lda SCREENSTART+1
+  sta CURLINE+1
+  clc
+  lda CURLINE
+  adc #4
+  sta CURDATA
+  lda CURLINE+1
+  adc #0
+  sta CURDATA+1
+
+  jmp repaint
+.)
 
 filestart
   lda FIRSTLINE
@@ -2164,59 +2222,6 @@ done
   jmp repaint
 
 
-#if 0
-  OLD FILEEND CODE
-.(
-  ;; jump to a point about 10 lines from the end of the file
-
-  phx
-  ldx #12
-
-  lda LASTLINE
-  sta SCRATCH
-  lda LASTLINE+1
-  sta SCRATCH+1
-
-lineloop
-  ldy #2
-  lda (SCRATCH),y
-  pha
-  iny
-  lda (SCRATCH),y
-  sta SCRATCH+1
-  pla
-  sta SCRATCH
-
-  dex
-  bne lineloop
-
-  plx
-
-  ;; reuse code from above???
-
-  lda SCRATCH
-  sta SCREENSTART
-  lda SCRATCH+1
-  sta SCREENSTART+1
-
-  stz row
-  stz col
-  lda SCREENSTART
-  sta CURLINE
-  lda SCREENSTART+1
-  sta CURLINE+1
-  clc
-  lda CURLINE
-  adc #4
-  sta CURDATA
-  lda CURLINE+1
-  adc #0
-  sta CURDATA+1
-  jmp repaint
-.)
-#endif
-
-
 save
   jsr savefile
   jsr addstatus
@@ -2228,28 +2233,6 @@ save
 ;;; *** SCREEN CONTROL
 ;;;
 
-;; for small integers (<100), convert to decimal and output
-todecimal
-.(
-  ldy #$30
-  sty temp  ; temp
-convloop
-  cmp #$0A
-  bmi donedigit
-  sec
-  sbc #$0A
-  inc temp
-  bne convloop
-donedigit
-  tay
-  lda temp
-  jsr ROMPUTCH
-  tya
-  clc
-  adc #$30
-  jsr ROMPUTCH
-  rts
-.)
 
 home
   ldy #0
