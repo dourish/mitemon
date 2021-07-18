@@ -528,6 +528,7 @@ emptyfile
 
 editstart
   jsr ra8875init    ; initialize video and clear screen
+  jsr kbdinit       ; set up 6522 for keyboard
 
   lda #<DATASTART   ; set up CURLINE to point to start of data
   sta CURLINE
@@ -573,13 +574,14 @@ warmstart
 ;;; really be a second table.
 editloop
 
-  jsr ROMGET
-  cmp #$1B        ; if it's less than 27, it's a control code
-  beq escape      ; exactly 27 is escape
-  bcs notcmd      ; over 27 is not a command
-  dec             ; subtract 1 (to turn it into a 0-ranged value)
-  asl             ; shift to multiply by two
-  tax             ; that's an offset, so put it in X
+  jsr kbdget        ; was ROMGETCH
+  bmi bit7set       ; the keyboard code generates some values > 127
+  cmp #$1B          ; if it's less than 27, it's a control code
+  beq escape        ; exactly 27 is escape
+  bcs notcmd        ; over 27 is not a command
+  dec               ; subtract 1 (to turn it into a 0-ranged value)
+  asl               ; shift to multiply by two
+  tax               ; that's an offset, so put it in X
   jmp (table,x)
 
   bra editloop    ; shouldn't need this but included for safety
@@ -587,8 +589,37 @@ editloop
 notcmd
   jmp insert
 
+bit7set
+  ;; the only codes we care about here are arrow keys
+.(
+  cmp #$96
+  bne next
+  jmp forw
+next
+.)
+.(
+  cmp #$94
+  bne next
+  jmp back
+next
+.)
+.(
+  cmp #$98
+  bne next
+  jmp prevrow
+next
+.)
+.(
+  cmp #$92
+  bne next
+  jmp nextrow
+next
+.)
+  ;; unknown code, so ignnore it
+  bra editloop
+
 escape
-  jsr ROMGETCH
+  jsr kbdget        ; was ROMGETCH
   cmp #"f"
   beq escf
   cmp #"b"
@@ -613,7 +644,7 @@ escless
 escgreater
   jmp fileend
 arrow
-  jsr ROMGETCH
+  jsr kbdget        ; was ROMGETCH
   cmp #"A"
   beq arrowup
   cmp #"B"
@@ -1910,7 +1941,7 @@ extended
   lda #>ctrlxmsg
   sta PRINTVEC+1
   jsr prtmessage
-  jsr ROMGETCH
+  jsr kbdget        ; was ROMGETCH
   cmp #19           ; ^S
   beq ctrls
   cmp #3            ; ^C
@@ -1944,7 +1975,7 @@ exit
   lda #>unsavedmsg
   sta PRINTVEC+1
   jsr prtmessage
-  jsr ROMGETCH
+  jsr kbdget        ; was ROMGETCH
   cmp #"y
   beq doexit
   cmp #"Y
@@ -4031,7 +4062,7 @@ dofinish
 ;;;
 ;;; get a character code via serial port, left in the accumulator
 ;;;
-geta
+getserial
 .(
 wait_rxd_empty
   lda ACIA_STATUS
@@ -4051,5 +4082,33 @@ wait_txd_empty
   pla
   sta ACIA_DATA
 .)
+  rts
+
+
+;;;
+;;; Keyboard routines
+;;;
+
+kbdinit
+  stz $8013
+  lda #10
+  sta $801c
+  rts
+
+kbdget
+  lda $801d
+  and #2
+  beq kbdget
+  lda $8011
+  pha
+  lda #12
+  sta $801c
+  nop
+  nop
+  nop
+  nop
+  lda #14
+  sta $801c
+  pla
   rts
 

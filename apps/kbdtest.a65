@@ -1,0 +1,174 @@
+
+;;;
+;;; Test code to read from Daryl Ricter's ATtiny26-based keyboard
+;;; decoder, connected via 6522.
+;;;
+
+* = $0300
+
+;; ACIA (6551) registers
+;;
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_COMMAND = $8802
+ACIA_CONTROL = $8803
+
+
+;; VIA (6522) registers
+;;
+VIA_PORTB = $8010
+PORTB     = $8010
+VIA_PORTA = $8011
+VIA_DDRB  = $8012
+VIA_DDRA  = $8013
+VIA_T1CL  = $8014
+VIA_T1CH  = $8015
+VIA_T1LL  = $8016
+VIA_T1LH  = $8017
+VIA_T2LL  = $8018
+VIA_T2CL  = $8018
+VIA_T2CH  = $8019 
+VIA_SR    = $801A
+VIA_ACR   = $801B
+VIA_PCR   = $801C
+VIA_IFR   = $801D
+VIA_IER   = $801E
+VIA_ORAX  = $801F
+
+
+  jsr primm
+  .byte "PS/2 keyboard test", $0d, $0a, $00
+
+  jsr primm
+  .byte "setting up 6522", $0d, $0a, $00
+
+  lda #$00          ; all input
+  sta VIA_DDRA      ; set DDR
+
+  lda VIA_PCR
+  ora #10           ; sets pulse output
+  sta VIA_PCR
+  
+loop
+  jsr primm
+  .byte "waiting", $0d, $0a, $00
+
+  ; wait
+
+wait
+  lda VIA_IFR       ; look at interrupt register
+  and #2            ; check for signal on CA1
+  beq wait
+   
+  ; read keyboard value
+  lda VIA_PORTA
+
+  ; print the character
+  jsr puta
+  jsr crlf
+
+  ;; I had thought that the device was designed to work with the
+  ;; automatic handshaking in the 6522, but it turns out not to be.
+  ;; Acknowledge read explicitly by manipulating CA2.
+  lda #12           ; CA2 low
+  sta VIA_PCR
+  nop               ; small delay for ATtiny to register. Three
+  nop               ; NOPs seems to do it. I should perhaps return to
+  nop               ; four for safety otherwise it will lock up.
+  lda #14           ; CA2 high
+  sta VIA_PCR
+  bra loop
+  
+  
+;;; print immediate -- hack the stack to find the string to print
+;;; right after the JSR instruction, and when complete, jump over the
+;;; string to resume execution.
+;;;
+DPL     =   $fd
+DPH     =   $fe
+primm:
+      pla               ; get low part of (string address-1)
+      sta   DPL
+      pla               ; get high part of (string address-1)
+      sta   DPH
+      bra   primm3
+primm2:
+      jsr   puta        ; output a string char
+primm3:
+      inc   DPL         ; advance the string pointer
+      bne   primm4
+      inc   DPH
+primm4:
+      lda   (DPL)       ; get string char
+      bne   primm2      ; output and continue if not NUL
+      lda   DPH
+      pha
+      lda   DPL
+      pha
+      rts               ; proceed at code following the NUL
+
+
+;;;
+;;; output the value in the accumulator as a hex pattern to serial port
+;;; NB x cannot be guaranteed to be stack ptr during this... check...
+;;;
+putax
+.(
+  pha
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  pla
+  rts
+
+
+;;;
+;;; output the character code in the accumulator to the serial port
+;;;
+puta
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+crlf
+  lda #$0d
+  jsr puta
+  lda #$0a
+  jsr puta
+  rts
+
+hextable .byte "0123456789ABCDEF"
