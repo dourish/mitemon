@@ -12,4 +12,9 @@ ROMNEWFILE =JMPTABLE+15    ; calls newfilesub
 ROMFINDDIRW=JMPTABLE+18    ; calls finddirword
 ROMPRTSTCK =JMPTABLE+21    ; calls printstacksub
 ROMSDSAVBUF=JMPTABLE+24    ; calls sdsavebuf
-
+ROMRDSERIAL=JMPTABLE+27    ; calls getserial
+ROMWRSERIAL=JMPTABLE+30    ; calls putserial
+ROMRDVREG  =JMPTABLE+33    ; called readvreg
+ROMWRVREG  =JMPTABLE+36    ; calls writevreg
+ROMWRRVDATA=JMPTABLE+39    ; calls sendvdata
+ROMPRTIMM  =JMPTABLE+42    ; calls primm

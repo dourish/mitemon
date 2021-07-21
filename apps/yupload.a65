@@ -30,11 +30,17 @@ WORD=$7EC0          ; string for filename lookups
 
 ;;; These variables, for XMODEM, are in the same locations as
 ;;; their equivalents in the monitor/FORTH
-XBLOCKNO    = $0030               ; stores block number
-XBLOCKINV   = $0031               ; stores inverted block number
-XBLOCKCOUNT = $0032               ; stores count (expected block number)
-XCHKSUM     = $0033               ; keeps track of checksum
-XDESTADDR   = $0034 ; and $0035   ; pointer to destination address
+;XBLOCKNO    = $0030               ; stores block number
+;XBLOCKINV   = $0031               ; stores inverted block number
+;XBLOCKCOUNT = $0032               ; stores count (expected block number)
+;XCHKSUM     = $0033               ; keeps track of checksum
+;XDESTADDR   = $0034 ; and $0035   ; pointer to destination address
+
+XBLOCKNO     .byte 0
+XBLOCKINV    .byte 0
+XBLOCKCOUNT  .byte 0
+XCHKSUM      .byte 0
+XDESTADDR=SCRATCH+10   ; need to be zero page
 
 ;;; Buffer space. Hold 4K from $4000 to $5000. $4A00 is high-water
 ;;; mark. When we reach $4A00, we flush the buffer. We need the
@@ -88,9 +94,6 @@ DEBUG=VIA_PORTA
 
 
 start
-  ;; set up the North VIA PORTA as the debug channel
-  lda #255          ; all bits as outputs
-  sta VIA_DDRA
 
   ;; extract the filename from the command line, and copy it into
   ;; WORD as a counted string
@@ -326,7 +329,7 @@ bumpy
 sendnack
   ;; send a nack
   lda #$15
-  jsr ROMPUTA
+  jsr ROMWRSERIAL 
   bra wait_rxd_full
 .)
 gotfirstchar
@@ -347,7 +350,7 @@ nextblock
   sta DEBUG
   ;; check header data and block number
 processbuffer
-  jsr getserial     ; get first character (if we don't already have it)
+  jsr ROMRDSERIAL   ; get first character (if we don't already have it)
   cmp #C_EOT        ; end-of-transmission?
   bne stillgoing
   jmp endoftransmission
@@ -377,11 +380,11 @@ begindata
 
   ;; get block number and inverse block number. both are sent to
   ;; reduce errors, so compare them.
-  jsr getserial
+  jsr ROMRDSERIAL
   sta XBLOCKNO
   lda #10
   sta DEBUG
-  jsr getserial
+  jsr ROMRDSERIAL
   sta XBLOCKINV
   lda #11
   sta DEBUG
@@ -430,7 +433,7 @@ processdata
 dataloop
   ldy #0
 nextbyte
-  jsr getserial
+  jsr ROMRDSERIAL 
   sta (XDESTADDR),y
   clc
   adc XCHKSUM
@@ -447,7 +450,7 @@ endof128
   ;; block? if it's 1024, then skip the checksum test
   lda YBLOCKS       ; YBLOCKS=0 when this block is complete
   bne nochecksum
-  jsr getserial
+  jsr ROMRDSERIAL 
   cmp XCHKSUM
   beq checksumok
 
@@ -456,7 +459,7 @@ endof128
   ;; to send a NAK and loop back (and perhaps count up in case this
   ;; happens repeatedly?)
   lda #C_NAK
-  jsr ROMPUTA
+  jsr ROMWRSERIAL 
   stz XCHKSUM
   lda #$04
   sta DEBUG
@@ -532,7 +535,7 @@ sendack
 
   ;; send an ACK and loop for the next block
   lda #C_ACK
-  jsr ROMPUTA
+  jsr ROMWRSERIAL 
 
   jmp nextblock     ; loop to read next block
 
@@ -560,11 +563,11 @@ flushdata
 noflush
   ;; finish tearing down the connection. first, send a NAK
   lda #C_NAK
-  jsr ROMPUTA
+  jsr ROMWRSERIAL 
 
   ;; we should get a second EOT but I'm not sure what I'd do if
   ;; I didn't!
-  jsr getserial
+  jsr ROMRDSERIAL
   cmp #4            ; not actually doing anything with this
   beq skipdebug
   lda #29
@@ -573,7 +576,7 @@ skipdebug
 
   ;; send an ACK
   lda #C_ACK
-  jsr ROMPUTA
+  jsr ROMWRSERIAL 
 
   ;; here, one of the only places where we care about which protocol
   ;; we are implementing. if it's XMODEM, then we are now ready to quit.
@@ -592,7 +595,7 @@ skipdebug
   stx XBLOCKNO      ; reset XBLOCKNO
 
   lda #C_NAK        ; send a NAK to signal ready for next block0
-  jsr ROMPUTA       ; which should be the termination block
+  jsr ROMWRSERIAL   ; which should be the termination block
 
   jmp nextblock
 
@@ -652,7 +655,7 @@ gotblock0
 
   ;; end of session. first, acknowledge the null block
   lda #C_ACK
-  jsr ROMPUTA
+  jsr ROMWRSERIAL 
 
   ;; and then we're done?
   jmp finish
@@ -719,9 +722,9 @@ nolength
   ;; now need to send an ACK to acknowledge block 0, and then
   ;; a NAK to initiate data
   lda #C_ACK
-  jsr ROMPUTA       ; send an ACK
+  jsr ROMWRSERIAL   ; send an ACK
   lda #C_NAK
-  jsr ROMPUTA       ; send a NAK
+  jsr ROMWRSERIAL   ; send a NAK
   jmp nextblock     ; proceed to load data
 
 
@@ -788,15 +791,15 @@ flushdatasub
 
 ;;; Subroutine to get a character from the serial port
 ;;;
-getserial
-.(
-wait_rxd_full    
-  lda ACIA_STATUS
-  and #$08
-  beq wait_rxd_full
-.)
-  lda ACIA_DATA
-  rts
+;getserial
+;.(
+;wait_rxd_full    
+;  lda ACIA_STATUS
+;  and #$08
+;  beq wait_rxd_full
+;.)
+;  lda ACIA_DATA
+;  rts
 
 
 ;;; convert the ascii file size to an integer in SCRATCH/S+1

@@ -1983,11 +1983,16 @@ exit
   jsr clrmessage
   jmp editloop
 
+VROW=$000A          ; these are set in the IOROM
+VCOL=$000B
+
 doexit
   jsr clrmessage
-  lda #NROWS
-  sta row
+  lda #MSGROW       ; move cursor and reset the system flags
+  sta row           ; VROW and VCOL to let system take over
+  sta VROW          ; scrolling again
   stz col
+  stz VCOL
   jsr moveto
   rts
 
@@ -4090,25 +4095,25 @@ wait_txd_empty
 ;;;
 
 kbdinit
-  stz $8013
+  stz $8003
   lda #10
-  sta $801c
+  sta $800c
   rts
 
 kbdget
-  lda $801d
+  lda $800d
   and #2
   beq kbdget
-  lda $8011
+  lda $8001
   pha
   lda #12
-  sta $801c
+  sta $800c
   nop
   nop
   nop
   nop
   lda #14
-  sta $801c
+  sta $800c
   pla
   rts
 
