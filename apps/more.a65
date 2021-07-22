@@ -1,0 +1,628 @@
+
+;;; MORE. Show file contents, pausing after each screen-ful.
+;;;
+;;; Paul Dourish, July 2021.
+;;;
+
+
+* = $0300
+
+jmp start
+
+#include "jmptable.a65"
+SCRATCH=$0010
+stackbase=0
+CURSEC=$0068
+INPUT=$7F00
+LBLOCK=$7C00
+HBLOCK=$7D00
+WORD=$7EC0          ; string for filename lookups
+
+CLUSTER .word 0     ; tracks the disk cluster we are reading
+FILELEN .word 0, 0  ; length of file remaining to print
+SECTOR  .word 0, 0  ; tracks the disk sector we are reading
+COUNT   .byte 0     ; count of bytes to print at a time
+LINES   .byte 0     ; count of lines to print on each screen
+
+NROWS=30
+
+start
+  jsr paramtoword   ; ????
+  jsr showsub
+.(
+  bcc continue      ; error reported?
+  jsr ROMPRTIMM
+  .byte "No such file", $0a, $0d, $00
+continue
+.)
+  rts
+
+;;; this is broken out as a subroutine so that it can be shared
+;;; with the disk manager. presumes on entry that the filename
+;;; is in WORD.
+showsub
+  jsr ROMFINDDIRW   ; look up in the directory
+.(
+  bcc continue
+  rts
+continue
+.)
+  ;jsr crlf
+
+  ;; grab the pointer to the data
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+  ;; remove pointer from the stack
+  inx
+  inx
+
+  ;; first, grab the cluster number for the file and push onto
+  ;; stack (overwriting directory sector number) as a double,
+  ;; caching it in CLUSTER
+  ldy #26
+  lda (SCRATCH),y ; LSB
+  sta CLUSTER
+  sta stackbase+1,x
+  iny
+  lda (SCRATCH),y ; MSB
+  sta CLUSTER+1
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  ;; grab the file size and stash it
+  iny
+  lda (SCRATCH),y
+  sta FILELEN
+  iny
+  lda (SCRATCH),y
+  sta FILELEN+1
+  iny
+  lda (SCRATCH),y
+  sta FILELEN+2
+  iny
+  lda (SCRATCH),y
+  sta FILELEN+3
+
+  ;; turn block count on stack into sector count, and load the sector
+  jsr cltosector
+
+  ;; cache the sector number
+  ;; cache the sector number
+  lda stackbase+1,x
+  sta SECTOR
+  lda stackbase+2,x
+  sta SECTOR+1
+  lda stackbase+3,x
+  sta SECTOR+2
+  lda stackbase+4,x
+  sta SECTOR+3
+
+  ;; I'm going to start messing with LBLOCK, so clear out the
+  ;; sector cache so as not to confuse myself later.
+  stz CURSEC
+  stz CURSEC+1
+  stz CURSEC+2
+  stz CURSEC+3
+
+  ;; load sector data into LBLOCK area
+  dex
+  dex
+  lda #<LBLOCK
+  sta stackbase+1,x
+  lda #>LBLOCK
+  sta stackbase+2,x
+
+  jsr ROMLOADMEM
+
+  ;; now type what's in the block, up to the file size. we print in
+  ;; blocks of 256 bytes, but we do so twice because the buffer is
+  ;; actually 512 bytes.
+  ;; BUG we ignore anything over 32k for the file size
+
+  ;jsr crlf
+
+  jsr cls
+  lda #NROWS-3
+  sta LINES
+
+typeblock
+.(
+  ;; by default, print 256 characters
+  lda #255
+  sta COUNT
+  ;; are there fewer than 256 characters to process?
+  lda FILELEN+1
+  beq under256
+  dec FILELEN+1     ; we will print 256 characters, take 256 off the count
+  bra first256
+under256
+  lda FILELEN       ; < 256, so lowest byte is # of chars to print
+  bne continue      ; if it's zero, we're done
+  jmp endshow
+continue
+  dec               ; range from 0 rather than 1
+  sta COUNT
+  stz FILELEN
+.)
+
+first256
+  ldy #0
+.(
+typechar
+  lda LBLOCK,y
+  jsr ROMPUTCH      ; print the character
+  cmp #10           ; was it a newline
+  bne nextchar
+  jsr donewline
+nextchar
+  cpy COUNT
+  beq done
+  iny
+  bra typechar
+done
+.)
+
+  ;; now consider the second 256 characters in the sector
+.(
+  ;; by default, print 256 characters
+  lda #255
+  sta COUNT
+  ;; are there fewer than 256 characters to process?
+  lda FILELEN+1
+  beq under256
+  dec FILELEN+1     ; update count for the end of the print
+  bra second256
+under256
+  lda FILELEN       ; < 256, so lowest byte is # of chars to print
+  beq endshow       ; if it's zero, we're done
+  dec               ; re-range to zero-index
+  sta COUNT
+  stz FILELEN       ; after which, there will be none left
+.)
+
+second256
+  ldy #0
+.(
+typechar
+  lda HBLOCK,y
+  jsr ROMPUTCH      ; print the character
+  cmp #10           ; was it a newline?
+  bne nextchar
+  jsr donewline
+nextchar
+  cpy COUNT
+  beq done
+  iny
+  bra typechar
+done
+.)
+
+  ;; if there is more data, load the next block and repeat
+  lda FILELEN+1
+  bne nextblock
+  lda FILELEN
+  beq endshow
+
+nextblock
+  ;; increment the sector number
+  clc
+  lda SECTOR
+  adc #1
+  sta SECTOR
+  lda SECTOR+1
+  adc #0
+  sta SECTOR+1
+  lda SECTOR+2
+  adc #0
+  sta SECTOR+2
+  lda SECTOR+3
+  adc #0
+  sta SECTOR+3
+  
+  ;; push onto stack
+  dex
+  dex
+  dex
+  dex
+  lda SECTOR
+  sta 1,x
+  lda SECTOR+1
+  sta 2,x
+  lda SECTOR+2
+  sta 3,x
+  lda SECTOR+3
+  sta 4,x
+  
+  ;; push address for data read
+  dex
+  dex
+  lda #<LBLOCK
+  sta 1,x
+  lda #>LBLOCK
+  sta 2,x
+  
+  ;; load data
+  jsr ROMLOADMEM
+
+  jmp typeblock
+
+endshow
+  clc
+  rts
+
+
+;;; we just printed a newline so update the count and optionally wait
+;;; for input
+donewline
+  phy
+  lda #13           ; CR to go with the NL
+  jsr ROMPUTCH
+
+  dec LINES
+  lda LINES
+  bne finishnl
+  jsr ROMPRTIMM
+  .byte "More?", $0
+  jsr ROMGETCH
+.(
+  cmp #13           ; return?
+  bne skip
+  lda #1            ; yes, so move forward by just one line
+  sta LINES
+  bra continue
+skip
+.)
+.(
+  cmp #"q
+  bne skip
+  jsr crlf          ; quitting
+  pla               ; hack the stack so that RTS exits
+  pla
+  pla
+  pla
+  pla
+  rts
+skip
+.)
+  lda #NROWS-3
+  sta LINES
+continue
+  lda #13           ; CR to erase the prompt
+  jsr ROMPUTCH
+
+finishnl
+  ply
+  rts
+
+;;; copy the parameter into WORD
+paramtoword
+.(
+phx
+  ldx #1
+  ldy #0
+  ;; skip to first space
+skip1
+  lda INPUT,y
+  beq doneword
+  cmp #32
+  beq skip2
+  iny
+  beq doneword
+  bra skip1
+  ;; now skip to first non-space
+skip2
+  lda INPUT,y
+  beq doneword
+  cmp #32
+  bne nextchar
+  iny
+  beq doneword
+  bra skip2
+  ;; now copy data to WORD
+nextchar
+  lda INPUT,y
+  beq doneword
+  cmp #32
+  beq doneword
+  sta WORD,x
+  iny
+  inx
+  bne nextchar
+doneword
+  dex
+  stx WORD          ; character count  
+  plx
+  rts
+.)
+
+crlf
+  lda #$0a
+  jsr ROMPUTCH
+  lda #$0d
+  jsr ROMPUTCH
+  rts
+
+cltosector
+.(
+  ;; subtract 2
+  sec
+  lda stackbase+1,x
+  sbc #2
+  sta stackbase+1,x
+  lda stackbase+2,x
+  sbc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  sbc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  sbc #0
+  sta stackbase+4,x
+done
+.)
+
+  ;; shift left 6 times, to multiply by 64
+  clc
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  rol stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  ;; add 545 ( = 512+33 = 2*256 + 33)
+  clc
+  lda stackbase+1,x
+  adc #33
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #2
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+
+  rts
+
+
+;;; MOVE THIS ROUTINE INTO ROM
+;;;
+;;; CLS. Clear the screen.
+;;;
+
+;;; these variables are imported from the monitor/FORTH
+
+VROW=$0A
+VCOL=$0B
+
+DLSTOP=0
+DLSTART=$80
+DRAWSQUARE=$10
+FILL=$20
+
+cls
+  ;; fill the screen with black
+  lda #0            ; color 0 is black
+  jsr fillcolor
+  jsr home
+  stz VCOL
+  stz VROW
+  rts
+
+
+home
+  ldy #0
+  lda #$2a
+  jsr ROMWRVREG
+  ldy #0
+  lda #$2b
+  jsr ROMWRVREG
+  ldy #0
+  lda #$2c
+  jsr ROMWRVREG
+  lda #$2d
+  ldy #0
+  jsr ROMWRVREG
+  
+  rts
+
+
+;;; also include all the RA8875-specific definitions
+#include "spivdefs.a65"
+
+;;; fill screen with the current foreground color
+;;;
+fillscreen
+
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy #0
+  jsr ROMWRVREG
+  ldy #0
+  lda #$92
+  jsr ROMWRVREG
+  ldy #0
+  lda #$93
+  jsr ROMWRVREG
+  ldy #0
+  lda #$94
+  jsr ROMWRVREG
+
+  lda #$95
+  ldy #$1F          ; lower byte for 799
+  jsr ROMWRVREG
+  lda #$96
+  ldy #03           ; upper byte for 799
+  jsr ROMWRVREG
+
+  lda #$97
+  ldy #$df          ; lower byte for 479
+  jsr ROMWRVREG
+  lda #$98          
+  ldy #$01          ; upper byte for 479
+  jsr ROMWRVREG
+
+  lda #DCR
+  ldy #DLSTOP|DRAWSQUARE
+  jsr ROMWRVREG
+  
+  lda #DCR
+  ldy #DLSTART|FILL|DRAWSQUARE
+  jsr ROMWRVREG
+
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr ROMRDVREG
+  bmi busyloop
+.)
+
+  rts
+
+;;; draw a filled rectangle, presuming that it's already all set up
+fillrect
+  lda #DCR
+  ldy #DLSTOP|DRAWSQUARE
+  jsr ROMWRVREG
+  
+  lda #DCR
+  ldy #DLSTART|FILL|DRAWSQUARE
+  jsr ROMWRVREG
+
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr ROMRDVREG
+  bmi busyloop
+.)
+
+  rts
+
+;;; set foreground color to values from color table indexed by A
+;;;
+setfg
+  sta SCRATCH       ; cache A then multiply by 3
+  asl               ; = *2
+  clc
+  adc SCRATCH       ; = *3
+  sta SCRATCH       ; store it because I can't rely on Y
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$63          ; register to A
+  jsr ROMWRVREG      ; store Y in A
+  inc SCRATCH       ; move on to next value
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$64          ; register to A
+  jsr ROMWRVREG      ; store Y in A
+  inc SCRATCH       ; move on to next value
+
+  ldy SCRATCH       ; load the offset
+  lda colors,y      ; load color value at offset
+  tay               ; move to Y
+  lda #$65          ; register to A
+  jsr ROMWRVREG      ; store Y in A
+
+  rts
+
+colors
+  .byte $00, $00, $00    ; black
+  .byte $1F, $00, $00    ; red
+  .byte $00, $3F, $00    ; green
+  .byte $00, $00, $1F    ; blue
+  .byte $00, $3F, $1F    ; cyan
+  .byte $1F, $00, $1F    ; magenta
+  .byte $1F, $3F, $00    ; yellow
+  .byte $1F, $3F, $1F    ; white
+  .byte $0F, $1F, $0F    ; grey
+  .byte $1D, $18, $15    ; pink?
+
+
+;;; fill the screen with the color from the color table specified in
+;;; the accumulator. Set color back to current setting afterwards.
+;;;
+fillcolor
+  sta SCRATCH       ; temporarily store color
+  
+  ;; look up current color values and save them
+  lda #$63
+  jsr ROMRDVREG
+  pha
+
+  lda #$64
+  jsr ROMRDVREG
+  pha
+
+  lda #$65
+  jsr ROMRDVREG
+  pha
+
+  ;; set fg color
+  lda SCRATCH
+  jsr setfg
+
+  ;; fill screen
+  jsr fillscreen
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr ROMRDVREG
+  bmi busyloop
+.)
+
+  ;; reset color
+  pla
+  tay
+  lda #$65
+  jsr ROMWRVREG
+  pla
+  tay
+  lda #$64
+  jsr ROMWRVREG
+  pla
+  tay
+  lda #$63
+  jsr ROMWRVREG
+
+  rts
+
+
+
+

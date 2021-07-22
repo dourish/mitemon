@@ -46,7 +46,7 @@ fastvputa=wrdata
 ;;; to DATAEND. NEXTFREE points to the next available space. FIRSTLINE
 ;;; and LASTLINE indicate the first and last lines of the text file.
 ;;;
-DATASTART=$4000     ; base of data storage area
+DATASTART=$2000     ; base of data storage area
 DATAEND=$7C00       ; end of data storage
 
 ;;; the $0070 area is used by FORTH but not for anything that might run
@@ -527,8 +527,10 @@ emptyfile
 ;;;
 
 editstart
-  jsr ra8875init    ; initialize video and clear screen
-  jsr kbdinit       ; set up 6522 for keyboard
+;  NEEDED THESE FOR RUNNING FROM SERIAL, BUT NOW SCREEN IS
+;  ALREADY SET UP
+;  jsr ra8875init    ; initialize video and clear screen
+;  jsr kbdinit       ; set up 6522 for keyboard
 
   lda #<DATASTART   ; set up CURLINE to point to start of data
   sta CURLINE
@@ -549,7 +551,7 @@ warmstart
   lda #1            ; set the PRISTINE flag. all edit operations
   sta PRISTINE      ; unset it so that we know file has changed.
 
-  ;jsr cls
+  jsr cls
   jsr home
   stz row
   stz col
