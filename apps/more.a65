@@ -25,6 +25,7 @@ COUNT   .byte 0     ; count of bytes to print at a time
 LINES   .byte 0     ; count of lines to print on each screen
 
 NROWS=30
+SCREENFUL=NROWS-2
 
 start
   jsr paramtoword   ; ????
@@ -126,7 +127,7 @@ continue
   ;jsr crlf
 
   jsr cls
-  lda #NROWS-3
+  lda #SCREENFUL
   sta LINES
 
 typeblock
@@ -273,6 +274,8 @@ donewline
   bne skip
   lda #1            ; yes, so move forward by just one line
   sta LINES
+  lda #13           ; CR to erase the prompt
+  jsr ROMPUTCH
   bra continue
 skip
 .)
@@ -288,11 +291,10 @@ skip
   rts
 skip
 .)
-  lda #NROWS-3
+  jsr cls
+  lda #SCREENFUL
   sta LINES
 continue
-  lda #13           ; CR to erase the prompt
-  jsr ROMPUTCH
 
 finishnl
   ply

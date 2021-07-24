@@ -34,4 +34,9 @@ VIA_IFR   = $800D
 VIA_IER   = $800E
 VIA_ORAX  = $800F
 
+;;; offsets for FAT16 directory entries
+DIRNAME=$00
+DIRCLUSTER=$$1A
+DIRSIZE=$1C
+
 
