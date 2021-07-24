@@ -36,7 +36,7 @@ VIA_ORAX  = $800F
 
 ;;; offsets for FAT16 directory entries
 DIRNAME=$00
-DIRCLUSTER=$$1A
+DIRCLUSTER=$1A
 DIRSIZE=$1C
 
 

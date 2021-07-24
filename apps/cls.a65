@@ -31,6 +31,9 @@ FILL=$20
 #include "../stack.a65"
 #include "jmptable.a65"
 
+BG .byte 0, 0, 0
+FG .byte 0, 0, 0
+
 
 start
 
@@ -61,7 +64,6 @@ home
 ;;; also include all the RA8875-specific definitions
 #include "spivdefs.a65"
 
-#include "delay.a65"
 
 ;;; fill screen with the current foreground color
 ;;;
@@ -113,129 +115,62 @@ busyloop
 
   rts
 
-;;; draw a filled rectangle, presuming that it's already all set up
-fillrect
-  lda #DCR
-  ldy #DLSTOP|DRAWSQUARE
-  jsr ROMWRVREG
-  
-  lda #DCR
-  ldy #DLSTART|FILL|DRAWSQUARE
-  jsr ROMWRVREG
-
-  ;; wait until complete
-.(
-busyloop
-  lda #$90
-  jsr ROMRDVREG
-  bmi busyloop
-.)
-
-  rts
-
-;;; set foreground color to values from color table indexed by A
-;;;
-setfg
-  sta SCRATCH       ; cache A then multiply by 3
-  asl               ; = *2
-  clc
-  adc SCRATCH       ; = *3
-  sta SCRATCH       ; store it because I can't rely on Y
-
-  ldy SCRATCH       ; load the offset
-  lda colors,y      ; load color value at offset
-  tay               ; move to Y
-  lda #$63          ; register to A
-  jsr ROMWRVREG      ; store Y in A
-  inc SCRATCH       ; move on to next value
-
-  ldy SCRATCH       ; load the offset
-  lda colors,y      ; load color value at offset
-  tay               ; move to Y
-  lda #$64          ; register to A
-  jsr ROMWRVREG      ; store Y in A
-  inc SCRATCH       ; move on to next value
-
-  ldy SCRATCH       ; load the offset
-  lda colors,y      ; load color value at offset
-  tay               ; move to Y
-  lda #$65          ; register to A
-  jsr ROMWRVREG      ; store Y in A
-
-  rts
-
-colors
-  .byte $00, $00, $00    ; black
-  .byte $1F, $00, $00    ; red
-  .byte $00, $3F, $00    ; green
-  .byte $00, $00, $1F    ; blue
-  .byte $00, $3F, $1F    ; cyan
-  .byte $1F, $00, $1F    ; magenta
-  .byte $1F, $3F, $00    ; yellow
-  .byte $1F, $3F, $1F    ; white
-  .byte $0F, $1F, $0F    ; grey
-  .byte $1D, $18, $15    ; pink?
-
-
-;;; fill the screen with the color from the color table specified in
-;;; the accumulator. Set color back to current setting afterwards.
-;;;
-fillcolor
-  sta SCRATCH       ; temporarily store color
-  
-  ;; look up current color values and save them
-  lda #$63
-  jsr ROMRDVREG
-  pha
-
-  lda #$64
-  jsr ROMRDVREG
-  pha
-
-  lda #$65
-  jsr ROMRDVREG
-  pha
-
-  ;; set fg color
-  lda SCRATCH
-  jsr setfg
-
-  ;; fill screen
-  jsr fillscreen
-  ;; wait until complete
-.(
-busyloop
-  lda #$90
-  jsr ROMRDVREG
-  bmi busyloop
-.)
-
-  ;; reset color
-  pla
-  tay
-  lda #$65
-  jsr ROMWRVREG
-  pla
-  tay
-  lda #$64
-  jsr ROMWRVREG
-  pla
-  tay
-  lda #$63
-  jsr ROMWRVREG
-
-  rts
-
-
-
-;;; clear screen
-;;;
+;;; clear the screen by filling it with the current background
+;;; color.
 cls
-  ;; fill the screen with black
-  lda #0            ; color 0 is black
-  jsr fillcolor
-
+  jsr setupcolors
+  jsr fillscreen    ; waits until operation completed
+  jsr resetcolors
   rts
 
 
 
+setupcolors
+  ;; cache the bg and fg colors
+  lda #$60
+  jsr ROMRDVREG
+  sta BG
+  lda #$61
+  jsr ROMRDVREG
+  sta BG+1
+  lda #$62
+  jsr ROMRDVREG
+  sta BG+2
+  lda #$63
+  jsr ROMRDVREG
+  sta FG
+  lda #$64
+  jsr ROMRDVREG
+  sta FG+1
+  lda #$65
+  jsr ROMRDVREG
+  sta FG+2
+
+  ;; set fg to bg
+  ldy BG
+  lda #$63
+  jsr ROMWRVREG
+  ldy BG+1
+  lda #$64
+  jsr ROMWRVREG
+  ldy BG+2
+  lda #$65
+  jsr ROMWRVREG
+
+  rts
+  
+
+resetcolors
+  ;; reset fg color (bg remains the same)
+  ;; set fg to bg
+  ldy FG
+  lda #$63
+  jsr ROMWRVREG
+  ldy FG+1
+  lda #$64
+  jsr ROMWRVREG
+  ldy FG+2
+  lda #$65
+  jsr ROMWRVREG
+  rts
+  
