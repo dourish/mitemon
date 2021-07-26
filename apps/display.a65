@@ -1,9 +1,16 @@
 ;;;
-;;; Display image data from a file. Files are currently limited to 32k,
-;;; so at standard aspect ratios, the largest file I can read at 8bpp
-;;; is just 192x144. The raw data for that is 27648 bytes, which is
-;;; 54 chunks of 512 bytes. So, we fill the buffer 54 times, and each time,
-;;; read the data, set the color, and paint a block of pixels.
+;;; Display image data from a file.
+;;;
+;;; The image parameters are essentially hard-coded in here. We presume
+;;; that images are 192x144 with 8bpp, encoded as rrrgggbb. Those make
+;;; files of 27648 bytes, the largest image size I can handle within
+;;; the file size cap of 32768 bytes. It's 54 chunks of 512 bytes, so
+;;; this just loops around filling the buffer 54 times, reading the pixel
+;;; data, decoding it, and writing it out in 3x3 blocks.
+;;;
+;;; BUG sometimes the display doesn't return appropriately to text
+;;; mode at the end of this. Resetting the display fixes things. Why
+;;; is this happening?
 ;;;
 ;;; Paul Dourish, July 2021.
 ;;;
@@ -32,8 +39,8 @@ LINES   .byte 0     ; count of lines to print on each screen
 NROWS=30
 SCREENFUL=NROWS-2
 
-XSTART=112
-YSTART=24
+XSTART=112          ; must be < 256
+YSTART=24           ; must be < 256
 XSIZE=3
 YSIZE=3
 XMAX=XSTART+191*XSIZE
@@ -45,7 +52,7 @@ BLOCKCOUNT .byte 0
 DATAPTR=SCRATCH+10
 
 start
-  jsr paramtoword   ; get command line parameter
+  jsr paramtoword   ; get filename from the command line
   jsr ROMFINDDIRW   ; look up in the directory
 .(
   bcc continue
@@ -55,7 +62,7 @@ start
 continue
 .)
 
-  ;; grab the pointer to the data, cache it in SCRATCH
+  ;; grab the pointer to the directory entry, cache it in SCRATCH
   lda stackbase+1,x
   sta SCRATCH
   lda stackbase+2,x
@@ -65,7 +72,7 @@ continue
   inx
   inx
 
-  ;; first, grab the cluster number for the file and push onto
+  ;; next, grab the cluster number for the file and push onto
   ;; stack (overwriting directory sector number) as a double,
   ;; caching it in CLUSTER at the same time
   ldy #26
@@ -79,10 +86,9 @@ continue
   stz stackbase+3,x
   stz stackbase+4,x
 
-  ;; turn block count on stack into sector count, and load the sector
+  ;; turn block count on stack into sector count
   jsr cltosector
 
-  ;; cache the sector number
   ;; cache the sector number
   lda stackbase+1,x
   sta SECTOR
@@ -92,18 +98,17 @@ continue
   sta SECTOR+2
   lda stackbase+4,x
   sta SECTOR+3
-  inx
+  inx               ; drop it from the stack
   inx
   inx
   inx
 
-  ;; clear the screen
-  jsr cls
+  jsr cls           ; clear the screen
 
   ;; set the location
   lda #XSTART
   sta XPOS
-  stz XPOS+1
+  stz XPOS+1        ; BUG assumes < 256
   lda #YSTART
   sta YPOS
   stz YPOS+1
@@ -128,7 +133,7 @@ blockloop
   lda SECTOR+3
   sta 4,x
   
-  ;; put destination on the stack (LBLOCK)
+  ;; put destination address (LBLOCK) on the stack
   dex
   dex
   lda #<LBLOCK
@@ -230,32 +235,41 @@ paintloop
   bne continuerow
 
   ;; end of row, so increment YPOS and reset XPOS
-  clc
-  lda YPOS
-  adc #YSIZE
-  sta YPOS
-  lda YPOS+1
-  adc #0
-  sta YPOS+1
+;  clc
+;  lda YPOS
+;  adc #YSIZE
+;  sta YPOS
+;  lda YPOS+1
+;  adc #0
+;  sta YPOS+1
+   ;; we already calculated this, above
+   lda SCRATCH+4
+   sta YPOS
+   lda SCRATCH+5
+   sta YPOS+1
 
   clc
   lda #<XSTART
   sta XPOS
-  lda #>XSTART
-  sta XPOS+1
+  stz XPOS+1        ; BUG assumes < 256
   bra proceed
 
 continuerow
   ;; continuing same row, so just increment XPOS
-.(
-  clc
-  lda XPOS
-  adc #XSIZE
+;.(
+;  clc
+;  lda XPOS
+;  adc #XSIZE
+;  sta XPOS
+;  bcc skip
+;  inc XPOS+1
+;skip
+;.)
+  ;; already caculated
+  lda SCRATCH+2
   sta XPOS
-  bcc skip
-  inc XPOS+1
-skip
-.)
+  lda SCRATCH+3
+  sta XPOS+1
 
 proceed
   iny
@@ -264,11 +278,11 @@ proceed
   jmp paintloop
 
 zeroy
-  ;; move onto upper block
+  ;; have we already processed upper block?
   lda DATAPTR+1
   cmp #>HBLOCK
-  beq newblock
-  lda #<HBLOCK
+  beq newblock      ; yes, so load a new one
+  lda #<HBLOCK      ; no, so move base pointer to upper block
   sta DATAPTR
   lda #>HBLOCK
   sta DATAPTR+1
@@ -302,8 +316,6 @@ newblock
   jmp blockloop
 
 alldone
-  lda #"x
-  jsr ROMWRSERIAL
   rts
 
 
