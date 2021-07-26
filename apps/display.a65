@@ -1,0 +1,635 @@
+;;;
+;;; Display image data from a file. Files are currently limited to 32k,
+;;; so at standard aspect ratios, the largest file I can read at 8bpp
+;;; is just 192x144. The raw data for that is 27648 bytes, which is
+;;; 54 chunks of 512 bytes. So, we fill the buffer 54 times, and each time,
+;;; read the data, set the color, and paint a block of pixels.
+;;;
+;;; Paul Dourish, July 2021.
+;;;
+
+
+* = $0300
+
+jmp start
+
+#include "../decl.a65"
+#include "jmptable.a65"
+SCRATCH=$0010
+stackbase=0
+CURSEC=$0068
+INPUT=$7F00
+LBLOCK=$7C00
+HBLOCK=$7D00
+WORD=$7EC0          ; string for filename lookups
+
+CLUSTER .word 0     ; tracks the disk cluster we are reading
+FILELEN .word 0, 0  ; length of file remaining to print
+SECTOR  .word 0, 0  ; tracks the disk sector we are reading
+COUNT   .byte 0     ; count of bytes to print at a time
+LINES   .byte 0     ; count of lines to print on each screen
+
+NROWS=30
+SCREENFUL=NROWS-2
+
+XSTART=112
+YSTART=24
+XSIZE=3
+YSIZE=3
+XMAX=XSTART+191*XSIZE
+
+XPOS .byte 0,0
+YPOS .byte 0,0
+BLOCKCOUNT .byte 0
+
+DATAPTR=SCRATCH+10
+
+start
+  jsr paramtoword   ; get command line parameter
+  jsr ROMFINDDIRW   ; look up in the directory
+.(
+  bcc continue
+  jsr ROMPRTIMM
+  .byte "No such file", $0a, $0d, $00
+  rts
+continue
+.)
+
+  ;; grab the pointer to the data, cache it in SCRATCH
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+  ;; remove pointer from the stack
+  inx
+  inx
+
+  ;; first, grab the cluster number for the file and push onto
+  ;; stack (overwriting directory sector number) as a double,
+  ;; caching it in CLUSTER at the same time
+  ldy #26
+  lda (SCRATCH),y ; LSB
+  sta CLUSTER
+  sta stackbase+1,x
+  iny
+  lda (SCRATCH),y ; MSB
+  sta CLUSTER+1
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  ;; turn block count on stack into sector count, and load the sector
+  jsr cltosector
+
+  ;; cache the sector number
+  ;; cache the sector number
+  lda stackbase+1,x
+  sta SECTOR
+  lda stackbase+2,x
+  sta SECTOR+1
+  lda stackbase+3,x
+  sta SECTOR+2
+  lda stackbase+4,x
+  sta SECTOR+3
+  inx
+  inx
+  inx
+  inx
+
+  ;; clear the screen
+  jsr cls
+
+  ;; set the location
+  lda #XSTART
+  sta XPOS
+  stz XPOS+1
+  lda #YSTART
+  sta YPOS
+  stz YPOS+1
+
+  ;; set up counter for 54 blocks
+  lda #53
+  sta BLOCKCOUNT
+
+blockloop
+
+  ;; put sector number on the stack
+  dex
+  dex
+  dex
+  dex
+  lda SECTOR
+  sta 1,x
+  lda SECTOR+1
+  sta 2,x
+  lda SECTOR+2
+  sta 3,x
+  lda SECTOR+3
+  sta 4,x
+  
+  ;; put destination on the stack (LBLOCK)
+  dex
+  dex
+  lda #<LBLOCK
+  sta stackbase+1,x
+  lda #>LBLOCK
+  sta stackbase+2,x
+
+  ;; load the block
+  jsr ROMLOADMEM
+
+  ;; set up pointer to data
+  lda #<LBLOCK
+  sta DATAPTR
+  lda #>LBLOCK
+  sta DATAPTR+1
+  ldy #0
+
+paintloop
+  phy
+  lda (DATAPTR),y   ; load next pixel
+  sta SCRATCH+2     ; cache it
+  ;jsr putaxserial
+  ;lda SCRATCH+2
+  and #%11100000    ; decoding. red component is top three bits
+  clc
+  lsr               ; shift to convert to five-bit value
+  lsr
+  lsr
+  tay
+  lda #$63          ; red fg register
+  jsr ROMWRVREG
+  lda SCRATCH+2     ; reload cached value
+  and #%00011100    ; green component is middle three bits
+  asl               ; shift to convert to six-bit value
+  tay
+  lda #$64          ; green fg register
+  jsr ROMWRVREG
+  lda SCRATCH+2     ; reload cached value
+  and #%00000011    ; blue component is bottom two bits
+  asl               ; shift to convert to five-bit value
+  asl
+  asl
+  tay
+  lda #$65          ; blue fg register
+  jsr ROMWRVREG
+
+  ;; calculate extent of area to paint. start will be at XPOS, YPOS
+  ;; and end will be in SCRATCH+2/3, SCRATCH+4/5
+  clc
+  lda XPOS
+  adc #XSIZE
+  sta SCRATCH+2
+  lda XPOS+1
+  adc #0
+  sta SCRATCH+3
+  clc
+  lda YPOS
+  adc #YSIZE
+  sta SCRATCH+4
+  lda YPOS+1
+  adc #0
+  sta SCRATCH+5
+
+  lda #$91          ; write LSB of startx
+  ldy XPOS
+  jsr ROMWRVREG
+  ldy XPOS+1        ; write MSB of startx
+  lda #$92
+  jsr ROMWRVREG
+  ldy YPOS          ; write LSB of starty
+  lda #$93
+  jsr ROMWRVREG
+  ldy YPOS+1        ; write MSB of starty
+  lda #$94
+  jsr ROMWRVREG
+
+  lda #$95          ; write LSB of endx
+  ldy SCRATCH+2
+  jsr ROMWRVREG
+  lda #$96          ; write MSB of endx
+  ldy SCRATCH+3
+  jsr ROMWRVREG
+  lda #$97          ; write LSB of endy
+  ldy SCRATCH+4
+  jsr ROMWRVREG
+  lda #$98          ; write MSB of endy
+  ldy SCRATCH+5
+  jsr ROMWRVREG
+
+  jsr fillrect      ; paint pixel block
+  ply
+
+  ;; update X and Y posn, checking for end of row
+  lda XPOS
+  cmp #<XMAX
+  bne continuerow
+  lda XPOS+1
+  cmp #>XMAX
+  bne continuerow
+
+  ;; end of row, so increment YPOS and reset XPOS
+  clc
+  lda YPOS
+  adc #YSIZE
+  sta YPOS
+  lda YPOS+1
+  adc #0
+  sta YPOS+1
+
+  clc
+  lda #<XSTART
+  sta XPOS
+  lda #>XSTART
+  sta XPOS+1
+  bra proceed
+
+continuerow
+  ;; continuing same row, so just increment XPOS
+.(
+  clc
+  lda XPOS
+  adc #XSIZE
+  sta XPOS
+  bcc skip
+  inc XPOS+1
+skip
+.)
+
+proceed
+  iny
+  cpy #0
+  beq zeroy
+  jmp paintloop
+
+zeroy
+  ;; move onto upper block
+  lda DATAPTR+1
+  cmp #>HBLOCK
+  beq newblock
+  lda #<HBLOCK
+  sta DATAPTR
+  lda #>HBLOCK
+  sta DATAPTR+1
+  ldy #0
+  jmp paintloop
+  
+  ;; bump block count and load next block
+newblock  
+  ;; check count and exit if done
+  lda BLOCKCOUNT
+  beq alldone
+  dec
+  sta BLOCKCOUNT
+  
+  ;; add one to sector number
+  clc
+  lda SECTOR
+  adc #1
+  sta SECTOR
+  lda SECTOR+1
+  adc #0
+  sta SECTOR+1
+  lda SECTOR+2
+  adc #0
+  sta SECTOR+2
+  lda SECTOR+3
+  adc #0
+  sta SECTOR+3
+  
+  ;; jump to block loop
+  jmp blockloop
+
+alldone
+  lda #"x
+  jsr ROMWRSERIAL
+  rts
+
+
+
+
+
+;;; draw a filled rectangle, presuming that it's already all set up
+fillrect
+  lda #DCR
+  ldy #DLSTOP|DRAWSQUARE
+  jsr ROMWRVREG
+  
+  lda #DCR
+  ldy #DLSTART|FILL|DRAWSQUARE
+  jsr ROMWRVREG
+
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr ROMRDVREG
+  bmi busyloop
+.)
+
+  rts
+
+;;;
+;;; CLS. Clear the screen.
+;;;
+
+VROW=$0A
+VCOL=$0B
+
+DLSTOP=0
+DLSTART=$80
+DRAWSQUARE=$10
+FILL=$20
+
+BG .byte 0, 0, 0
+FG .byte 0, 0, 0
+
+
+cls
+  jsr clearscreen
+  jsr home
+  stz VCOL
+  stz VROW
+  rts
+
+
+home
+  ldy #0
+  lda #$2a
+  jsr ROMWRVREG
+  ldy #0
+  lda #$2b
+  jsr ROMWRVREG
+  ldy #0
+  lda #$2c
+  jsr ROMWRVREG
+  lda #$2d
+  ldy #0
+  jsr ROMWRVREG
+  
+  rts
+
+
+;;; also include all the RA8875-specific definitions
+#include "spivdefs.a65"
+
+
+;;; fill screen with the current foreground color
+;;;
+fillscreen
+
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy #0
+  jsr ROMWRVREG
+  ldy #0
+  lda #$92
+  jsr ROMWRVREG
+  ldy #0
+  lda #$93
+  jsr ROMWRVREG
+  ldy #0
+  lda #$94
+  jsr ROMWRVREG
+
+  lda #$95
+  ldy #$1F          ; lower byte for 799
+  jsr ROMWRVREG
+  lda #$96
+  ldy #03           ; upper byte for 799
+  jsr ROMWRVREG
+
+  lda #$97
+  ldy #$df          ; lower byte for 479
+  jsr ROMWRVREG
+  lda #$98          
+  ldy #$01          ; upper byte for 479
+  jsr ROMWRVREG
+
+  lda #DCR
+  ldy #DLSTOP|DRAWSQUARE
+  jsr ROMWRVREG
+  
+  lda #DCR
+  ldy #DLSTART|FILL|DRAWSQUARE
+  jsr ROMWRVREG
+
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr ROMRDVREG
+  bmi busyloop
+.)
+
+  rts
+
+;;; clear the screen by filling it with the current background
+;;; color.
+clearscreen
+  jsr setupcolors
+  jsr fillscreen    ; waits until operation completed
+  jsr resetcolors
+  rts
+
+
+
+setupcolors
+  ;; cache the bg and fg colors
+  lda #$60
+  jsr ROMRDVREG
+  sta BG
+  lda #$61
+  jsr ROMRDVREG
+  sta BG+1
+  lda #$62
+  jsr ROMRDVREG
+  sta BG+2
+  lda #$63
+  jsr ROMRDVREG
+  sta FG
+  lda #$64
+  jsr ROMRDVREG
+  sta FG+1
+  lda #$65
+  jsr ROMRDVREG
+  sta FG+2
+
+  ;; set fg to bg
+  ldy BG
+  lda #$63
+  jsr ROMWRVREG
+  ldy BG+1
+  lda #$64
+  jsr ROMWRVREG
+  ldy BG+2
+  lda #$65
+  jsr ROMWRVREG
+
+  rts
+  
+
+resetcolors
+  ;; reset fg color (bg remains the same)
+  ;; set fg to bg
+  ldy FG
+  lda #$63
+  jsr ROMWRVREG
+  ldy FG+1
+  lda #$64
+  jsr ROMWRVREG
+  ldy FG+2
+  lda #$65
+  jsr ROMWRVREG
+  rts
+  
+
+
+
+
+paramtoword
+.(
+  phx
+  ldx #1
+  ldy #0
+  ;; skip to first space
+skip1
+  lda INPUT,y
+  beq doneword
+  cmp #32
+  beq skip2
+  iny
+  beq doneword
+  bra skip1
+  ;; now skip to first non-space
+skip2
+  lda INPUT,y
+  beq doneword
+  cmp #32
+  bne nextchar
+  iny
+  beq doneword
+  bra skip2
+  ;; now copy data to WORD
+nextchar
+  lda INPUT,y
+  beq doneword
+  cmp #32
+  beq doneword
+  sta WORD,x
+  iny
+  inx
+  bne nextchar
+doneword
+  dex
+  stx WORD          ; character count  
+  plx
+  rts
+.)
+
+cltosector
+.(
+  ;; subtract 2
+  sec
+  lda stackbase+1,x
+  sbc #2
+  sta stackbase+1,x
+  lda stackbase+2,x
+  sbc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  sbc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  sbc #0
+  sta stackbase+4,x
+done
+.)
+
+  ;; shift left 6 times, to multiply by 64
+  clc
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  rol stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  ;; add 545 ( = 512+33 = 2*256 + 33)
+  clc
+  lda stackbase+1,x
+  adc #33
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #2
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+
+  rts
+
+putaxserial
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back for lower nybble
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  pha               ; put a copy back for exit
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  pla               ; restore A
+  ply               ; restore Y
+  rts
+
+hextable .byte "0123456789abcdef"
