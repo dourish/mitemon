@@ -8,10 +8,6 @@
 ;;; this just loops around filling the buffer 54 times, reading the pixel
 ;;; data, decoding it, and writing it out in 3x3 blocks.
 ;;;
-;;; BUG sometimes the display doesn't return appropriately to text
-;;; mode at the end of this. Resetting the display fixes things. Why
-;;; is this happening?
-;;;
 ;;; Paul Dourish, July 2021.
 ;;;
 
@@ -48,6 +44,7 @@ XMAX=XSTART+191*XSIZE
 XPOS .byte 0,0
 YPOS .byte 0,0
 BLOCKCOUNT .byte 0
+COLOR .byte 0,0,0
 
 DATAPTR=SCRATCH+10
 
@@ -103,7 +100,19 @@ continue
   inx
   inx
 
-  jsr cls           ; clear the screen
+  ;jsr cls           ; clear the screen
+
+  ;; cache the current fg color
+  lda #$63
+  jsr ROMRDVREG
+  sta COLOR
+  lda #$64
+  jsr ROMRDVREG
+  sta COLOR+1
+  lda #$65
+  jsr ROMRDVREG
+  sta COLOR+2
+  
 
   ;; set the location
   lda #XSTART
@@ -153,29 +162,45 @@ blockloop
 
 paintloop
   phy
+
+  ;; for color decoding, we need to map rrrgggbb into the RA8875 color
+  ;; space. RA8875 uses five bits each for red and blue, and six for green.
+  ;; the bits from the rrrgggbb byte basically become the high-end bits
+  ;; for the RA8875 colors. Uses a set of predefined tables to map
+  ;; the low-bit-count colors into higher-bit-count colors.
   lda (DATAPTR),y   ; load next pixel
   sta SCRATCH+2     ; cache it
+
   ;jsr putaxserial
   ;lda SCRATCH+2
   and #%11100000    ; decoding. red component is top three bits
   clc
-  lsr               ; shift to convert to five-bit value
   lsr
   lsr
+  lsr
+  lsr
+  lsr
+  tay
+  lda redmap,y
   tay
   lda #$63          ; red fg register
   jsr ROMWRVREG
+
   lda SCRATCH+2     ; reload cached value
   and #%00011100    ; green component is middle three bits
-  asl               ; shift to convert to six-bit value
+  clc
+  lsr
+  lsr
+  tay
+  lda greenmap,y
   tay
   lda #$64          ; green fg register
   jsr ROMWRVREG
+
   lda SCRATCH+2     ; reload cached value
   and #%00000011    ; blue component is bottom two bits
-  asl               ; shift to convert to five-bit value
-  asl
-  asl
+  tay
+  lda bluemap,y
   tay
   lda #$65          ; blue fg register
   jsr ROMWRVREG
@@ -316,9 +341,28 @@ newblock
   jmp blockloop
 
 alldone
+  ;; reset fg color
+  ldy COLOR
+  lda #$63
+  jsr ROMWRVREG
+  ldy COLOR+1
+  lda #$64
+  jsr ROMWRVREG
+  ldy COLOR+2
+  lda #$65
+  jsr ROMWRVREG
+
   rts
 
+;;; diffusion table. Have three bits of red that I want to map onto
+;;; seven bits, three bits of green that I want to map onto eight
+;;; bits, and two bits of blue that I want to map into five. Using just
+;;; the top or just the bottom of the scale is unsatisfying, so let's
+;;; try a table of mappings.
 
+redmap   .byte 0, 4, 8, 13, 18, 23, 27, 31
+greenmap .byte 0, 6, 14, 22, 30, 40, 51, 63
+bluemap  .byte 0, 8, 16, 31
 
 
 
